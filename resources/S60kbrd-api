@@ -1,0 +1,26 @@
+#!/bin/sh
+
+PIDFILE=/var/run/kbrd-api.pid
+APP=/usr/bin/kbrd-api
+
+case "$1" in
+  start)
+    echo "Starting kbrd-api on :81"
+    start-stop-daemon -S -b -m -p "$PIDFILE" \
+      -x "$APP" -- 
+    ;;
+  stop)
+    echo "Stopping kbrd-api"
+    start-stop-daemon -K -p "$PIDFILE"
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0
