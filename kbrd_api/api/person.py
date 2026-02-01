@@ -68,3 +68,19 @@ class Person:
                 if cur.rowcount == 0:
                     return jsonify(error="not found"), 404
                 return jsonify(ok=True)
+
+        @app.get("/api/person/last")
+        def get_last_person():
+            with self.db.connect() as conn:
+                row = conn.execute(
+                    "SELECT id, first_name, last_name "
+                    "FROM person "
+                    "ORDER BY id DESC "
+                    "LIMIT 1"
+                ).fetchone()
+
+                # Pas de contenu => objet vide (200), côté client c'est simple
+                if row is None:
+                    return jsonify({}), 200
+
+                return jsonify(dict(row)), 200
