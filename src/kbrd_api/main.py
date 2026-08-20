@@ -2,8 +2,8 @@ from flask import Flask
 
 from kbrd_api.config import Config
 from kbrd_api.db import DB
-from kbrd_api.api.hello import Hello
-from kbrd_api.api.person import Person
+from kbrd_api.api.health import Health
+from kbrd_api.api.geometry import Geometry
 
 def create_app() -> Flask:
     cfg = Config()
@@ -12,8 +12,8 @@ def create_app() -> Flask:
     db = DB(cfg.db_path)
     db.init_schema()
 
-    Hello().register(app)
-    Person(db).register(app)
+    Health().register(app)
+    Geometry(db).register(app)
 
     return app, cfg
 

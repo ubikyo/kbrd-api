@@ -1,26 +1,78 @@
 #!/bin/sh
 
-PIDFILE=/var/run/kbrd-api.pid
-APP=/usr/bin/kbrd-api
+DAEMON="/usr/bin/kbrd-api"
+
+start_daemon()
+{
+    printf "Starting kbrd-api: "
+
+    if pidof kbrd-api >/dev/null 2>&1; then
+        echo "already running"
+        return 0
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        HOME=/home/kbrd \
+        start-stop-daemon \
+            -S \
+            -b \
+            -c kbrd \
+            -x "$DAEMON"
+    else
+        HOME=/home/kbrd \
+        start-stop-daemon \
+            -S \
+            -b \
+            -x "$DAEMON"
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo "OK"
+    else
+        echo "FAIL"
+        return 1
+    fi
+}
+
+stop_daemon()
+{
+    printf "Stopping kbrd-api: "
+
+    if pidof kbrd-api >/dev/null 2>&1; then
+        kill "$(pidof kbrd-api)"
+
+        if [ $? -ne 0 ]; then
+            echo "FAIL"
+            return 1
+        fi
+
+        while pidof kbrd-api >/dev/null 2>&1; do
+            sleep 0.1
+        done
+    fi
+
+    echo "OK"
+}
 
 case "$1" in
-  start)
-    echo "Starting kbrd-api on :81"
-    start-stop-daemon -S -b -m -p "$PIDFILE" \
-      -x "$APP" -- 
-    ;;
-  stop)
-    echo "Stopping kbrd-api"
-    start-stop-daemon -K -p "$PIDFILE"
-    ;;
-  restart)
-    $0 stop
-    $0 start
-    ;;
-  *)
-    echo "Usage: $0 {start|stop|restart}"
-    exit 1
-    ;;
+    start)
+        start_daemon
+        ;;
+
+    stop)
+        stop_daemon
+        ;;
+
+    restart)
+        stop_daemon || exit 1
+        sleep 1
+        start_daemon
+        ;;
+
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
 esac
 
-exit 0
+exit $?

@@ -15,11 +15,14 @@ class DB:
     def init_schema(self) -> None:
         with self.connect() as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS person (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  first_name TEXT NOT NULL,
-                  last_name  TEXT NOT NULL,
-                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                CREATE TABLE IF NOT EXISTS geometry (
+                  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name        TEXT NOT NULL,
+                  description TEXT NOT NULL DEFAULT '',
+                  author      TEXT NOT NULL DEFAULT '',
+                  unit        TEXT NOT NULL CHECK(unit IN ('px', 'mm')),
+                  geometry    TEXT NOT NULL,
+                  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
                 );
             """)
             conn.commit()
