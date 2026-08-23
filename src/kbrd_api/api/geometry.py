@@ -3,7 +3,7 @@ import json
 from flask import Flask, request, jsonify
 
 from kbrd_api.db import DB
-
+from .geometry_svg import generate_geometry_svg
 
 class Geometry:
     def __init__(self, db: DB):
@@ -17,8 +17,72 @@ class Geometry:
             "author": row["author"],
             "unit": row["unit"],
             "geometry": json.loads(row["geometry"]),
+            "svg": row["svg"],
             "created_at": row["created_at"],
         }
+
+    def _prepare_geometry(
+        self,
+        geometry,
+        unit: str,
+    ) -> tuple[str, str]:
+        if not isinstance(geometry, list):
+            raise ValueError("geometry must be an array")
+
+        for row_index, row in enumerate(geometry):
+            if not isinstance(row, list):
+                raise ValueError(
+                    f"row {row_index + 1} must be an array"
+                )
+
+            for item_index, item in enumerate(row):
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        f"item {row_index + 1}:{item_index + 1} "
+                        "must be an object"
+                    )
+
+                size = item.get("size")
+                quantity = item.get("quantity", 1)
+                rowspan = item.get("rowspan", 1)
+                colspan = item.get("colspan", 1)
+
+                if not isinstance(size, (int, float)) or size <= 0:
+                    raise ValueError(
+                        f"invalid size at "
+                        f"{row_index + 1}:{item_index + 1}"
+                    )
+
+                if not isinstance(quantity, int) or quantity < 1:
+                    raise ValueError(
+                        f"invalid quantity at "
+                        f"{row_index + 1}:{item_index + 1}"
+                    )
+
+                if not isinstance(rowspan, int) or rowspan < 0:
+                    raise ValueError(
+                        f"invalid rowspan at "
+                        f"{row_index + 1}:{item_index + 1}"
+                    )
+
+                if not isinstance(colspan, int) or colspan < 0:
+                    raise ValueError(
+                        f"invalid colspan at "
+                        f"{row_index + 1}:{item_index + 1}"
+                    )
+
+        geometry_json = json.dumps(
+            geometry,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+        svg = generate_geometry_svg(
+            geometry=geometry,
+            unit=unit,
+        )
+
+        return geometry_json, svg
 
     def register(self, app: Flask) -> None:
         @app.get("/api/geometry")
@@ -33,6 +97,7 @@ class Geometry:
                         author,
                         unit,
                         geometry,
+                        svg,
                         created_at
                     FROM geometry
                     ORDER BY name, id
@@ -56,6 +121,7 @@ class Geometry:
                         author,
                         unit,
                         geometry,
+                        svg,
                         created_at
                     FROM geometry
                     WHERE id=?
@@ -82,31 +148,32 @@ class Geometry:
                 return jsonify(error="missing name"), 400
 
             if unit not in ("px", "mm"):
-                return jsonify(error="unit must be 'px' or 'mm'"), 400
-
-            if not isinstance(geometry, list):
-                return jsonify(error="geometry must be an array"), 400
+                return jsonify(
+                    error="unit must be 'px' or 'mm'"
+                ), 400
 
             try:
-                geometry_json = json.dumps(
+                geometry_json, svg = self._prepare_geometry(
                     geometry,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                    unit,
                 )
-            except (TypeError, ValueError):
-                return jsonify(error="invalid geometry"), 400
+            except (TypeError, ValueError) as exc:
+                return jsonify(
+                    error=f"invalid geometry: {exc}"
+                ), 400
 
             with self.db.connect() as conn:
                 cur = conn.execute(
                     """
-                    INSERT INTO geometry(
+                    INSERT INTO geometry (
                         name,
                         description,
                         author,
                         unit,
-                        geometry
+                        geometry,
+                        svg
                     )
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         name,
@@ -114,6 +181,7 @@ class Geometry:
                         author,
                         unit,
                         geometry_json,
+                        svg,
                     ),
                 )
 
@@ -129,6 +197,7 @@ class Geometry:
                         author,
                         unit,
                         geometry,
+                        svg,
                         created_at
                     FROM geometry
                     WHERE id=?
@@ -136,7 +205,9 @@ class Geometry:
                     (geometry_id,),
                 ).fetchone()
 
-                return jsonify(self._row_to_dict(row)), 201
+                return jsonify(
+                    self._row_to_dict(row)
+                ), 201
 
         @app.put("/api/geometry/<int:geometry_id>")
         def update_geometry(geometry_id: int):
@@ -152,19 +223,19 @@ class Geometry:
                 return jsonify(error="missing name"), 400
 
             if unit not in ("px", "mm"):
-                return jsonify(error="unit must be 'px' or 'mm'"), 400
-
-            if not isinstance(geometry, list):
-                return jsonify(error="geometry must be an array"), 400
+                return jsonify(
+                    error="unit must be 'px' or 'mm'"
+                ), 400
 
             try:
-                geometry_json = json.dumps(
+                geometry_json, svg = self._prepare_geometry(
                     geometry,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                    unit,
                 )
-            except (TypeError, ValueError):
-                return jsonify(error="invalid geometry"), 400
+            except (TypeError, ValueError) as exc:
+                return jsonify(
+                    error=f"invalid geometry: {exc}"
+                ), 400
 
             with self.db.connect() as conn:
                 cur = conn.execute(
@@ -175,7 +246,8 @@ class Geometry:
                         description=?,
                         author=?,
                         unit=?,
-                        geometry=?
+                        geometry=?,
+                        svg=?
                     WHERE id=?
                     """,
                     (
@@ -184,6 +256,7 @@ class Geometry:
                         author,
                         unit,
                         geometry_json,
+                        svg,
                         geometry_id,
                     ),
                 )
@@ -191,7 +264,9 @@ class Geometry:
                 conn.commit()
 
                 if cur.rowcount == 0:
-                    return jsonify(error="not found"), 404
+                    return jsonify(
+                        error="not found"
+                    ), 404
 
                 row = conn.execute(
                     """
@@ -202,6 +277,7 @@ class Geometry:
                         author,
                         unit,
                         geometry,
+                        svg,
                         created_at
                     FROM geometry
                     WHERE id=?
@@ -209,19 +285,26 @@ class Geometry:
                     (geometry_id,),
                 ).fetchone()
 
-                return jsonify(self._row_to_dict(row))
+                return jsonify(
+                    self._row_to_dict(row)
+                )
 
         @app.delete("/api/geometry/<int:geometry_id>")
         def delete_geometry(geometry_id: int):
             with self.db.connect() as conn:
                 cur = conn.execute(
-                    "DELETE FROM geometry WHERE id=?",
+                    """
+                    DELETE FROM geometry
+                    WHERE id=?
+                    """,
                     (geometry_id,),
                 )
 
                 conn.commit()
 
                 if cur.rowcount == 0:
-                    return jsonify(error="not found"), 404
+                    return jsonify(
+                        error="not found"
+                    ), 404
 
                 return jsonify(ok=True)
