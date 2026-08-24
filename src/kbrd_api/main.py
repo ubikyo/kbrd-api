@@ -5,8 +5,9 @@ from kbrd_api.db import DB
 from kbrd_api.api.health import Health
 from kbrd_api.api.geometry import Geometry
 
-def create_app() -> Flask:
-    cfg = Config()
+
+def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
+    cfg = cfg or Config()
     app = Flask(__name__)
 
     db = DB(cfg.db_path)
@@ -20,6 +21,7 @@ def create_app() -> Flask:
 def main() -> None:
     app, cfg = create_app()
     app.run(host=cfg.host, port=cfg.port)
+
 
 if __name__ == "__main__":
     main()

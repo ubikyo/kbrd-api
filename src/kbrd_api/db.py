@@ -1,13 +1,15 @@
 import os
 import sqlite3
-from typing import Optional
+
 
 class DB:
     def __init__(self, db_path: str):
         self.db_path = db_path
 
     def connect(self) -> sqlite3.Connection:
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        directory = os.path.dirname(self.db_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn

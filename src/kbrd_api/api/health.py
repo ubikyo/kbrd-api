@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
+
 
 class Health:
     def register(self, app: Flask) -> None:
