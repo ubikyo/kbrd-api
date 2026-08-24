@@ -29,47 +29,82 @@ class Geometry:
         if not isinstance(geometry, list):
             raise ValueError("geometry must be an array")
 
-        for row_index, row in enumerate(geometry):
-            if not isinstance(row, list):
+        for group_index, group in enumerate(geometry):
+            if not isinstance(group, dict):
                 raise ValueError(
-                    f"row {row_index + 1} must be an array"
+                    f"group {group_index + 1} must be an object"
                 )
 
-            for item_index, item in enumerate(row):
-                if not isinstance(item, dict):
+            rows = group.get("elements")
+            if not isinstance(rows, list):
+                raise ValueError(
+                    f"rows missing in group {group_index + 1}"
+                )
+
+            group_gap = group.get("gap", 0)
+            if not isinstance(group_gap, (int, float)) or group_gap < 0:
+                raise ValueError(
+                    f"invalid gap in group {group_index + 1}"
+                )
+
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, list):
                     raise ValueError(
-                        f"item {row_index + 1}:{item_index + 1} "
-                        "must be an object"
+                        f"row {group_index + 1}:{row_index + 1} "
+                        "must be an array"
                     )
 
-                size = item.get("size")
-                quantity = item.get("quantity", 1)
-                rowspan = item.get("rowspan", 1)
-                colspan = item.get("colspan", 1)
+                for item_index, item in enumerate(row):
+                    if not isinstance(item, dict):
+                        raise ValueError(
+                            f"element {group_index + 1}:"
+                            f"{row_index + 1}:{item_index + 1} "
+                            "must be an object"
+                        )
 
-                if not isinstance(size, (int, float)) or size <= 0:
-                    raise ValueError(
-                        f"invalid size at "
-                        f"{row_index + 1}:{item_index + 1}"
-                    )
+                    element_type = item.get("type", "key")
+                    if element_type not in ("key", "space"):
+                        raise ValueError(
+                            f"invalid type at "
+                            f"{group_index + 1}:{row_index + 1}:"
+                            f"{item_index + 1}"
+                        )
 
-                if not isinstance(quantity, int) or quantity < 1:
-                    raise ValueError(
-                        f"invalid quantity at "
-                        f"{row_index + 1}:{item_index + 1}"
-                    )
+                    size = item.get("size")
+                    quantity = item.get("quantity", 1)
+                    rowspan = item.get("rowspan", 1)
+                    colspan = item.get("colspan", 1)
 
-                if not isinstance(rowspan, int) or rowspan < 0:
-                    raise ValueError(
-                        f"invalid rowspan at "
-                        f"{row_index + 1}:{item_index + 1}"
-                    )
+                    if not isinstance(size, (int, float)) or size <= 0:
+                        raise ValueError("invalid size")
 
-                if not isinstance(colspan, int) or colspan < 0:
-                    raise ValueError(
-                        f"invalid colspan at "
-                        f"{row_index + 1}:{item_index + 1}"
-                    )
+                    if not isinstance(quantity, int) or quantity < 1:
+                        raise ValueError("invalid quantity")
+
+                    if not isinstance(rowspan, int) or rowspan < 0:
+                        raise ValueError("invalid rowspan")
+
+                    if not isinstance(colspan, int) or colspan < 0:
+                        raise ValueError("invalid colspan")
+
+                    parts = item.get("parts", [])
+                    if not isinstance(parts, list):
+                        raise ValueError("parts must be an array")
+
+                    for part in parts:
+                        if not isinstance(part, dict):
+                            raise ValueError("part must be an object")
+                    if parts:
+                        for part in parts:
+                            if (
+                                not isinstance(part.get("width"), (int, float))
+                                or not isinstance(part.get("height"), (int, float))
+                                or part["width"] <= 0
+                                or part["height"] <= 0
+                                or part.get("align", "right")
+                                not in ("left", "center", "right")
+                            ):
+                                raise ValueError("invalid composite part")
 
         geometry_json = json.dumps(
             geometry,
