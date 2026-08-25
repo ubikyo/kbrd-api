@@ -26,7 +26,11 @@ class GeometryLayoutTest(unittest.TestCase):
         self.assertEqual((layout.width, layout.height), (107, 32))
         self.assertEqual(
             [(key.x, key.width) for key in layout.keys],
-            [(0, 16), (19, 16), (49, 32), (91, 16)],
+            [(0, 16), (19, 16), (38, 8), (49, 32), (91, 16)],
+        )
+        self.assertEqual(
+            [key.type for key in layout.keys],
+            ["key", "key", "space", "key", "key"],
         )
 
     def test_rowspan_moves_next_row_to_free_space(self):

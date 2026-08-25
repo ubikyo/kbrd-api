@@ -21,6 +21,7 @@ class KeyLayout:
     ref: str
     name: str
     parts: tuple[PartLayout, ...] = ()
+    type: str = "key"
 
 
 @dataclass(frozen=True)
@@ -171,16 +172,16 @@ def layout_geometry(geometry: list) -> GeometryLayout:
                     if "ref" not in item and quantity > 1:
                         actual_ref += f"-n{quantity_index + 1}"
 
-                    if item_type == "key":
-                        keys.append(KeyLayout(
-                            x=x,
-                            y=y,
-                            width=width,
-                            height=height,
-                            ref=actual_ref,
-                            name=str(item.get("name", "")),
-                            parts=parts,
-                        ))
+                    keys.append(KeyLayout(
+                        x=x,
+                        y=y,
+                        width=width,
+                        height=height,
+                        ref=actual_ref,
+                        name=str(item.get("name", "")),
+                        parts=parts,
+                        type=item_type,
+                    ))
 
                     right = x + width
                     for covered_row in range(row_index, row_index + rowspan):

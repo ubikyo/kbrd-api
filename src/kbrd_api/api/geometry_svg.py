@@ -39,10 +39,12 @@ def _render_key(key: KeyLayout, scale: float) -> str:
     attributes = (
         f'data-key="{escape(key.ref)}" '
         f'data-name="{escape(key.name)}" '
+        f'data-type="{escape(key.type)}" '
     )
     style = (
         'fill="rgba(0,0,0,0)" '
-        'stroke="rgba(255,255,255,0.5)" stroke-width="1"'
+        f'stroke="{"rgba(255,255,255,0.5)" if key.type == "key" else "none"}" '
+        'stroke-width="1" vector-effect="non-scaling-stroke"'
     )
 
     if key.parts:
@@ -53,6 +55,9 @@ def _render_key(key: KeyLayout, scale: float) -> str:
 
     return (
         f'<rect class="kbrd-key" {attributes}'
+        f'data-x="{key.x * scale:.3f}" data-y="{key.y * scale:.3f}" '
+        f'data-width="{key.width * scale:.3f}" '
+        f'data-height="{key.height * scale:.3f}" '
         f'x="{key.x * scale:.3f}" y="{key.y * scale:.3f}" '
         f'width="{key.width * scale:.3f}" height="{key.height * scale:.3f}" '
         f'rx="{BORDER_RADIUS}" ry="{BORDER_RADIUS}" {style} />'

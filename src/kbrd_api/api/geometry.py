@@ -9,7 +9,7 @@ from .geometry_svg import render_geometry_svg
 
 
 GEOMETRY_COLUMNS = """
-    id, name, description, author, unit, geometry, svg, created_at
+    id, name, description, author, unit, geometry, svg, active, created_at
 """
 
 
@@ -18,7 +18,7 @@ class Geometry:
         self.db = db
 
     @staticmethod
-    def _row_to_dict(row, include_layout: bool = False) -> dict:
+    def _row_to_dict(row) -> dict:
         geometry = json.loads(row["geometry"])
         layout = layout_geometry(geometry)
         result = {
@@ -29,10 +29,10 @@ class Geometry:
             "unit": row["unit"],
             "geometry": geometry,
             "svg": render_geometry_svg(layout, row["unit"]),
+            "active": bool(row["active"]),
             "created_at": row["created_at"],
+            "layout": asdict(layout),
         }
-        if include_layout:
-            result["layout"] = asdict(layout)
         return result
 
     @staticmethod
@@ -127,6 +127,7 @@ class Geometry:
                     SELECT {GEOMETRY_COLUMNS}
                     FROM geometry
                     ORDER BY
+                        active DESC,
                         CASE WHEN lower(name) = 'default' THEN 0 ELSE 1 END,
                         name,
                         id
@@ -134,7 +135,21 @@ class Geometry:
                 """).fetchone()
                 if row is None:
                     return jsonify(error="not found"), 404
-                return jsonify(self._row_to_dict(row, include_layout=True))
+                return jsonify(self._row_to_dict(row))
+
+        @app.put("/api/geometry/<int:geometry_id>/activate")
+        def activate_geometry(geometry_id: int):
+            with self.db.connect() as conn:
+                row = self._find(conn, geometry_id)
+                if row is None:
+                    return jsonify(error="not found"), 404
+                conn.execute("UPDATE geometry SET active=0")
+                conn.execute(
+                    "UPDATE geometry SET active=1 WHERE id=?",
+                    (geometry_id,),
+                )
+                conn.execute("UPDATE workspace SET active=0")
+                return jsonify(self._row_to_dict(self._find(conn, geometry_id)))
 
         @app.get("/api/geometry/<int:geometry_id>")
         def get_geometry(geometry_id: int):

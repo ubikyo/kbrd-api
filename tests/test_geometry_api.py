@@ -49,6 +49,24 @@ class GeometryApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json["error"], "geometry must be an array")
 
+    def test_activates_a_geometry(self):
+        first = self.client.post("/api/geometry", json={
+            "name": "Default",
+            "unit": "px",
+            "geometry": [],
+        }).json
+        second = self.client.post("/api/geometry", json={
+            "name": "Alternative",
+            "unit": "px",
+            "geometry": [],
+        }).json
+
+        activated = self.client.put(f"/api/geometry/{second['id']}/activate")
+        self.assertEqual(activated.status_code, 200)
+        self.assertTrue(activated.json["active"])
+        self.assertEqual(self.client.get("/api/geometry/active").json["id"], second["id"])
+        self.assertNotEqual(first["id"], second["id"])
+
 
 if __name__ == "__main__":
     unittest.main()
