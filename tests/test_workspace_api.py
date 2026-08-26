@@ -146,7 +146,7 @@ class WorkspaceApiTest(unittest.TestCase):
             json={"name": "Images"},
         ).json
         uploaded = self.client.post(
-            "/api/medias",
+            "/api/media",
             data={
                 "file": (
                     io.BytesIO(

@@ -148,7 +148,7 @@ class Workspace:
                     return send_from_directory(directory, filename)
             return jsonify(error="font not found"), 404
 
-        @app.post("/api/medias")
+        @app.post("/api/media")
         def upload_media():
             uploaded = request.files.get("file")
             if uploaded is None or not uploaded.filename:
@@ -168,7 +168,7 @@ class Workspace:
                 return jsonify(error=f"media storage unavailable: {exc.strerror}"), 500
             return jsonify(filename=filename), 201
 
-        @app.get("/api/medias/<filename>")
+        @app.get("/api/media/<filename>")
         def get_media(filename):
             return send_from_directory(self.media_dir, filename)
 

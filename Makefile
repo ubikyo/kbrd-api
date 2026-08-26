@@ -7,7 +7,6 @@ SERVICE := /etc/init.d/S60kbrd-api
 
 deploy:
 	@printf "\033[47;30m %-60s \033[0m\n" " KBRD-API : déploiement "
-	ssh $(TARGET) "sudo install -d -m 0775 -o kbrd -g kbrd /data/medias /data/fonts"
 	rsync -av --delete \
 		--exclude='__pycache__/' \
 		--exclude='*.pyc' \
