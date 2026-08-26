@@ -72,4 +72,16 @@ class DB:
                   PRIMARY KEY(workspace_id, key_ref)
                 );
             """)
+            plugin_ids = {
+                "kbrd.image": "kbrd.render-image",
+                "kbrd.label": "kbrd.render-label",
+                "kbrd.rectangle": "kbrd.render-rectangle",
+                "kbrd.send-keys": "kbrd.invoke-keystroke",
+                "kbrd.set-geometry": "kbrd.invoke-geometry",
+                "kbrd.set-workspace": "kbrd.invoke-workspace",
+            }
+            conn.executemany(
+                "UPDATE key_plugin SET plugin_id=? WHERE plugin_id=?",
+                ((new_id, old_id) for old_id, new_id in plugin_ids.items()),
+            )
             conn.commit()

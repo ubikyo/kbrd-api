@@ -9,9 +9,11 @@ from kbrd_api.config import Config
 try:
     from kbrd_api.main import create_app
     from kbrd_api.api.workspace import Workspace
+    from kbrd_api.db import DB
 except ModuleNotFoundError:
     create_app = None
     Workspace = None
+    DB = None
 
 
 @unittest.skipIf(create_app is None, "Flask is not installed")
@@ -61,7 +63,7 @@ class WorkspaceApiTest(unittest.TestCase):
         plugin = self.client.post(
             f"/api/workspace/{workspace['id']}/keys/A/plugins",
             json={
-                "plugin_id": "kbrd.label",
+                "plugin_id": "kbrd.render-label",
                 "plugin_version": "1.0.0",
                 "config": {"text": "Hello"},
             },
@@ -91,6 +93,40 @@ class WorkspaceApiTest(unittest.TestCase):
             json={"name": "Orphan"},
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_migrates_legacy_plugin_ids(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Legacy plugins"},
+        ).json
+        legacy_ids = (
+            "kbrd.image",
+            "kbrd.label",
+            "kbrd.rectangle",
+            "kbrd.send-keys",
+            "kbrd.set-geometry",
+            "kbrd.set-workspace",
+        )
+        for plugin_id in legacy_ids:
+            response = self.client.post(
+                f"/api/workspace/{workspace['id']}/keys/A/plugins",
+                json={"plugin_id": plugin_id, "plugin_version": "1.0.0"},
+            )
+            self.assertEqual(response.status_code, 201)
+
+        DB(self.db_path).init_schema()
+        migrated = self.client.get(f"/api/workspace/{workspace['id']}").json
+        self.assertEqual(
+            [plugin["plugin_id"] for plugin in migrated["plugins"]],
+            [
+                "kbrd.render-image",
+                "kbrd.render-label",
+                "kbrd.render-rectangle",
+                "kbrd.invoke-keystroke",
+                "kbrd.invoke-geometry",
+                "kbrd.invoke-workspace",
+            ],
+        )
 
     def test_lists_all_workspaces_and_geometry_activation_clears_workspace(self):
         workspace = self.client.post(
@@ -168,7 +204,7 @@ class WorkspaceApiTest(unittest.TestCase):
         plugin = self.client.post(
             f"/api/workspace/{workspace['id']}/keys/A/plugins",
             json={
-                "plugin_id": "kbrd.image",
+                "plugin_id": "kbrd.render-image",
                 "plugin_version": "1.0.0",
                 "config": {"media": filename, "fullSize": True, "size": 75},
             },

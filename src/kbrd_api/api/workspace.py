@@ -48,7 +48,7 @@ class Workspace:
                 pass
 
     def _delete_plugin_media(self, row) -> None:
-        if row is None or row["plugin_id"] != "kbrd.image":
+        if row is None or row["plugin_id"] != "kbrd.render-image":
             return
         try:
             self._delete_media(json.loads(row["config"]))
@@ -356,7 +356,7 @@ class Workspace:
                     (plugin_id,),
                 ).fetchone()
                 current_config = json.loads(row["config"])
-                if row["plugin_id"] == "kbrd.image":
+                if row["plugin_id"] == "kbrd.render-image":
                     self._delete_media(
                         previous_config,
                         keep=self._media_names(current_config),
