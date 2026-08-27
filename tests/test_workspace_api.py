@@ -227,6 +227,85 @@ class WorkspaceApiTest(unittest.TestCase):
             {"up.jpeg", "down.jpeg"},
         )
 
+    def test_video_upload_is_deleted_with_plugin(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Videos"},
+        ).json
+        uploaded = self.client.post(
+            "/api/media",
+            data={
+                "file": (
+                    io.BytesIO(b"\x1aE\xdf\xa3" + b"\x00" * 128),
+                    "transparent.webm",
+                    "video/webm",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(uploaded.status_code, 201)
+        filename = uploaded.json["filename"]
+        media_path = Path(self.media_dir.name) / filename
+        self.assertTrue(media_path.is_file())
+
+        plugin = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-video",
+                "plugin_version": "1.0.0",
+                "config": {"media": filename, "fit": "contain"},
+            },
+        ).json
+        response = self.client.delete(f"/api/key-plugin/{plugin['id']}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(media_path.exists())
+
+    def test_replacing_video_deletes_previous_media(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Replace video"},
+        ).json
+        old_media = "old.webm"
+        new_media = "new.webm"
+        old_path = Path(self.media_dir.name) / old_media
+        new_path = Path(self.media_dir.name) / new_media
+        old_path.write_bytes(b"old")
+        new_path.write_bytes(b"new")
+        plugin = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-video",
+                "plugin_version": "1.0.0",
+                "config": {"media": old_media},
+            },
+        ).json
+
+        response = self.client.put(
+            f"/api/key-plugin/{plugin['id']}",
+            json={"config": {"media": new_media}},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(old_path.exists())
+        self.assertTrue(new_path.exists())
+
+    def test_rejects_unsupported_video_container(self):
+        response = self.client.post(
+            "/api/media",
+            data={
+                "file": (
+                    io.BytesIO(b"not-a-video"),
+                    "movie.mov",
+                    "video/quicktime",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json, {"error": "invalid media"})
+
     def test_lists_and_serves_data_fonts(self):
         listed = self.client.get("/api/fonts")
         self.assertEqual(listed.status_code, 200)

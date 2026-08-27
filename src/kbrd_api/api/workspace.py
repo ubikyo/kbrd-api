@@ -10,6 +10,7 @@ from kbrd_api.db import DB
 
 class Workspace:
     ALLOWED_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png"}
+    ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".webm"}
     ALLOWED_FONT_EXTENSIONS = {".otf", ".ttf"}
 
     def __init__(
@@ -48,7 +49,10 @@ class Workspace:
                 pass
 
     def _delete_plugin_media(self, row) -> None:
-        if row is None or row["plugin_id"] != "kbrd.render-image":
+        if row is None or row["plugin_id"] not in {
+            "kbrd.render-image",
+            "kbrd.render-video",
+        }:
             return
         try:
             self._delete_media(json.loads(row["config"]))
@@ -154,11 +158,17 @@ class Workspace:
             if uploaded is None or not uploaded.filename:
                 return jsonify(error="missing file"), 400
             extension = Path(uploaded.filename).suffix.lower()
-            if (
-                extension not in self.ALLOWED_IMAGE_EXTENSIONS
-                or not (uploaded.mimetype or "").startswith("image/")
-            ):
-                return jsonify(error="invalid image"), 400
+            mimetype = uploaded.mimetype or ""
+            valid_image = (
+                extension in self.ALLOWED_IMAGE_EXTENSIONS
+                and mimetype.startswith("image/")
+            )
+            valid_video = (
+                extension in self.ALLOWED_VIDEO_EXTENSIONS
+                and mimetype.startswith("video/")
+            )
+            if not (valid_image or valid_video):
+                return jsonify(error="invalid media"), 400
             try:
                 self.media_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{uuid4().hex}{extension}"
@@ -356,7 +366,10 @@ class Workspace:
                     (plugin_id,),
                 ).fetchone()
                 current_config = json.loads(row["config"])
-                if row["plugin_id"] == "kbrd.render-image":
+                if row["plugin_id"] in {
+                    "kbrd.render-image",
+                    "kbrd.render-video",
+                }:
                     self._delete_media(
                         previous_config,
                         keep=self._media_names(current_config),
