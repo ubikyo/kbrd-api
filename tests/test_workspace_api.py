@@ -176,6 +176,136 @@ class WorkspaceApiTest(unittest.TestCase):
             [{"key_ref": "A", "config": config}],
         )
 
+    def test_duplicates_key_plugins_before_existing_instances(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Duplicated plugins"},
+        ).json
+        source = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-label",
+                "plugin_version": "2.0.0",
+                "config": {"text": "Source"},
+            },
+        ).json
+        self.client.put(
+            f"/api/key-plugin/{source['id']}",
+            json={"enabled": False},
+        )
+        existing = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/B/plugins",
+            json={
+                "plugin_id": "kbrd.render-rectangle",
+                "plugin_version": "1.0.0",
+                "config": {"color": "#123456"},
+            },
+        ).json
+
+        response = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/B/plugins/duplicate-from",
+            json={"source_key_ref": "A"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        target_plugins = [
+            plugin for plugin in response.json if plugin["key_ref"] == "B"
+        ]
+        self.assertEqual(
+            [plugin["plugin_id"] for plugin in target_plugins],
+            ["kbrd.render-label", "kbrd.render-rectangle"],
+        )
+        self.assertEqual([plugin["position"] for plugin in target_plugins], [0, 1])
+        self.assertEqual(target_plugins[0]["plugin_version"], "2.0.0")
+        self.assertEqual(target_plugins[0]["config"], {"text": "Source"})
+        self.assertFalse(target_plugins[0]["enabled"])
+        self.assertEqual(target_plugins[1]["id"], existing["id"])
+
+    def test_clears_all_key_plugins_and_properties(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Cleared key"},
+        ).json
+        self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-label",
+                "plugin_version": "1.0.0",
+                "config": {"text": "Remove me"},
+            },
+        )
+        self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/B/plugins",
+            json={
+                "plugin_id": "kbrd.render-label",
+                "plugin_version": "1.0.0",
+                "config": {"text": "Keep me"},
+            },
+        )
+        self.client.put(
+            f"/api/workspace/{workspace['id']}/keys/A/properties",
+            json={"config": {"keyMode": "toggle"}},
+        )
+
+        response = self.client.delete(
+            f"/api/workspace/{workspace['id']}/keys/A"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [plugin["key_ref"] for plugin in response.json["plugins"]],
+            ["B"],
+        )
+        self.assertEqual(response.json["key_properties"], [])
+
+    def test_moves_key_plugins_and_properties_before_destination_plugins(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Moved key"},
+        ).json
+        moved = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-label",
+                "plugin_version": "1.0.0",
+                "config": {"text": "Moved"},
+            },
+        ).json
+        existing = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/B/plugins",
+            json={
+                "plugin_id": "kbrd.render-rectangle",
+                "plugin_version": "1.0.0",
+                "config": {"color": "#123456"},
+            },
+        ).json
+        self.client.put(
+            f"/api/workspace/{workspace['id']}/keys/A/properties",
+            json={"config": {"keyMode": "toggle"}},
+        )
+        self.client.put(
+            f"/api/workspace/{workspace['id']}/keys/B/properties",
+            json={"config": {"keyMode": "momentary"}},
+        )
+
+        response = self.client.post(
+            f"/api/workspace/{workspace['id']}/keys/A/move-to",
+            json={"destination_key_ref": "B"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [
+                (plugin["id"], plugin["key_ref"], plugin["position"])
+                for plugin in response.json["plugins"]
+            ],
+            [(moved["id"], "B", 0), (existing["id"], "B", 1)],
+        )
+        self.assertEqual(
+            response.json["key_properties"],
+            [{"key_ref": "B", "config": {"keyMode": "toggle"}}],
+        )
+
     def test_image_upload_is_deleted_with_plugin(self):
         workspace = self.client.post(
             f"/api/geometry/{self.geometry['id']}/workspace",

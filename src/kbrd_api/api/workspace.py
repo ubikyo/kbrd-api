@@ -332,6 +332,152 @@ class Workspace:
                 ).fetchone()
                 return jsonify(self._plugin(row)), 201
 
+        @app.post(
+            "/api/workspace/<int:workspace_id>/keys/<key_ref>/plugins/duplicate-from"
+        )
+        def duplicate_plugins(workspace_id, key_ref):
+            data = request.get_json(silent=True) or {}
+            source_key_ref = str(data.get("source_key_ref") or "").strip()
+            if not source_key_ref:
+                return jsonify(error="missing source_key_ref"), 400
+
+            with self.db.connect() as conn:
+                if self._workspace(conn, workspace_id) is None:
+                    return jsonify(error="workspace not found"), 404
+                source_plugins = conn.execute(
+                    """
+                    SELECT * FROM key_plugin
+                    WHERE workspace_id=? AND key_ref=?
+                    ORDER BY position, id
+                    """,
+                    (workspace_id, source_key_ref),
+                ).fetchall()
+                if source_plugins:
+                    conn.execute(
+                        """
+                        UPDATE key_plugin SET position=position + ?
+                        WHERE workspace_id=? AND key_ref=?
+                        """,
+                        (len(source_plugins), workspace_id, key_ref),
+                    )
+                    for position, plugin in enumerate(source_plugins):
+                        conn.execute(
+                            """
+                            INSERT INTO key_plugin(
+                                workspace_id, key_ref, plugin_id,
+                                plugin_version, position, enabled, config
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                workspace_id,
+                                key_ref,
+                                plugin["plugin_id"],
+                                plugin["plugin_version"],
+                                position,
+                                plugin["enabled"],
+                                plugin["config"],
+                            ),
+                        )
+                plugins = conn.execute(
+                    """
+                    SELECT * FROM key_plugin
+                    WHERE workspace_id=? ORDER BY key_ref, position, id
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+                return jsonify([self._plugin(plugin) for plugin in plugins]), 201
+
+        @app.post(
+            "/api/workspace/<int:workspace_id>/keys/<key_ref>/move-to"
+        )
+        def move_key(workspace_id, key_ref):
+            data = request.get_json(silent=True) or {}
+            destination_key_ref = str(
+                data.get("destination_key_ref") or ""
+            ).strip()
+            if not destination_key_ref:
+                return jsonify(error="missing destination_key_ref"), 400
+            if destination_key_ref == key_ref:
+                return jsonify(error="source and destination are identical"), 400
+
+            with self.db.connect() as conn:
+                workspace = self._workspace(conn, workspace_id)
+                if workspace is None:
+                    return jsonify(error="workspace not found"), 404
+                source_plugins = conn.execute(
+                    """
+                    SELECT * FROM key_plugin
+                    WHERE workspace_id=? AND key_ref=?
+                    ORDER BY position, id
+                    """,
+                    (workspace_id, key_ref),
+                ).fetchall()
+                if source_plugins:
+                    conn.execute(
+                        """
+                        UPDATE key_plugin SET position=position + ?
+                        WHERE workspace_id=? AND key_ref=?
+                        """,
+                        (
+                            len(source_plugins),
+                            workspace_id,
+                            destination_key_ref,
+                        ),
+                    )
+                    for position, plugin in enumerate(source_plugins):
+                        conn.execute(
+                            """
+                            UPDATE key_plugin SET key_ref=?, position=?
+                            WHERE id=?
+                            """,
+                            (destination_key_ref, position, plugin["id"]),
+                        )
+                source_property = conn.execute(
+                    """
+                    SELECT config FROM key_property
+                    WHERE workspace_id=? AND key_ref=?
+                    """,
+                    (workspace_id, key_ref),
+                ).fetchone()
+                if source_property is not None:
+                    conn.execute(
+                        """
+                        DELETE FROM key_property
+                        WHERE workspace_id=? AND key_ref=?
+                        """,
+                        (workspace_id, destination_key_ref),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE key_property SET key_ref=?
+                        WHERE workspace_id=? AND key_ref=?
+                        """,
+                        (destination_key_ref, workspace_id, key_ref),
+                    )
+                return jsonify(self._item(conn, workspace, True))
+
+        @app.delete("/api/workspace/<int:workspace_id>/keys/<key_ref>")
+        def clear_key(workspace_id, key_ref):
+            with self.db.connect() as conn:
+                workspace = self._workspace(conn, workspace_id)
+                if workspace is None:
+                    return jsonify(error="workspace not found"), 404
+                key_plugins = conn.execute(
+                    "SELECT * FROM key_plugin WHERE workspace_id=? AND key_ref=?",
+                    (workspace_id, key_ref),
+                ).fetchall()
+                conn.execute(
+                    "DELETE FROM key_plugin WHERE workspace_id=? AND key_ref=?",
+                    (workspace_id, key_ref),
+                )
+                conn.execute(
+                    "DELETE FROM key_property WHERE workspace_id=? AND key_ref=?",
+                    (workspace_id, key_ref),
+                )
+                for plugin in key_plugins:
+                    self._delete_plugin_media(plugin)
+                return jsonify(self._item(conn, workspace, True))
+
         @app.put("/api/key-plugin/<int:plugin_id>")
         def update_plugin(plugin_id):
             data = request.get_json(silent=True) or {}

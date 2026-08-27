@@ -5,6 +5,7 @@ from kbrd_api.db import DB
 from kbrd_api.api.health import Health
 from kbrd_api.api.geometry import Geometry
 from kbrd_api.api.workspace import Workspace
+from kbrd_api.api.agent import Agent
 
 
 def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
@@ -16,6 +17,7 @@ def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
     db.init_schema()
 
     Health().register(app)
+    Agent().register(app)
     geometry = Geometry(db)
     geometry.register(app)
     Workspace(
