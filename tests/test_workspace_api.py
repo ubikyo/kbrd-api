@@ -420,6 +420,32 @@ class WorkspaceApiTest(unittest.TestCase):
         self.assertFalse(old_path.exists())
         self.assertTrue(new_path.exists())
 
+    def test_shared_media_is_deleted_only_after_last_reference(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Shared video"},
+        ).json
+        filename = "shared.webm"
+        media_path = Path(self.media_dir.name) / filename
+        media_path.write_bytes(b"shared")
+        plugins = [
+            self.client.post(
+                f"/api/workspace/{workspace['id']}/keys/{key}/plugins",
+                json={
+                    "plugin_id": "kbrd.render-video",
+                    "plugin_version": "1.0.0",
+                    "config": {"media": filename},
+                },
+            ).json
+            for key in ("A", "B")
+        ]
+
+        self.client.delete(f"/api/key-plugin/{plugins[0]['id']}")
+        self.assertTrue(media_path.exists())
+
+        self.client.delete(f"/api/key-plugin/{plugins[1]['id']}")
+        self.assertFalse(media_path.exists())
+
     def test_rejects_unsupported_video_container(self):
         response = self.client.post(
             "/api/media",

@@ -12,6 +12,7 @@ class Workspace:
     ALLOWED_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png"}
     ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".webm"}
     ALLOWED_FONT_EXTENSIONS = {".otf", ".ttf"}
+    MEDIA_PLUGIN_IDS = ("kbrd.render-image", "kbrd.render-video")
 
     def __init__(
         self,
@@ -41,21 +42,34 @@ class Workspace:
             if isinstance(filename, str) and Path(filename).name == filename
         }
 
-    def _delete_media(self, config, keep=frozenset()) -> None:
+    def _media_is_referenced(self, conn, filename: str) -> bool:
+        placeholders = ",".join("?" for _ in self.MEDIA_PLUGIN_IDS)
+        rows = conn.execute(
+            f"SELECT config FROM key_plugin WHERE plugin_id IN ({placeholders})",
+            self.MEDIA_PLUGIN_IDS,
+        ).fetchall()
+        for row in rows:
+            try:
+                if filename in self._media_names(json.loads(row["config"])):
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _delete_media(self, conn, config, keep=frozenset()) -> None:
         for filename in self._media_names(config) - set(keep):
+            if self._media_is_referenced(conn, filename):
+                continue
             try:
                 (self.media_dir / filename).unlink(missing_ok=True)
             except OSError:
                 pass
 
-    def _delete_plugin_media(self, row) -> None:
-        if row is None or row["plugin_id"] not in {
-            "kbrd.render-image",
-            "kbrd.render-video",
-        }:
+    def _delete_plugin_media(self, conn, row) -> None:
+        if row is None or row["plugin_id"] not in self.MEDIA_PLUGIN_IDS:
             return
         try:
-            self._delete_media(json.loads(row["config"]))
+            self._delete_media(conn, json.loads(row["config"]))
         except (TypeError, ValueError):
             pass
 
@@ -285,7 +299,7 @@ class Workspace:
                 if cursor.rowcount == 0:
                     return jsonify(error="not found"), 404
                 for plugin_row in plugin_rows:
-                    self._delete_plugin_media(plugin_row)
+                    self._delete_plugin_media(conn, plugin_row)
                 return jsonify(ok=True)
 
         @app.post("/api/workspace/<int:workspace_id>/keys/<key_ref>/plugins")
@@ -475,7 +489,7 @@ class Workspace:
                     (workspace_id, key_ref),
                 )
                 for plugin in key_plugins:
-                    self._delete_plugin_media(plugin)
+                    self._delete_plugin_media(conn, plugin)
                 return jsonify(self._item(conn, workspace, True))
 
         @app.put("/api/key-plugin/<int:plugin_id>")
@@ -512,11 +526,9 @@ class Workspace:
                     (plugin_id,),
                 ).fetchone()
                 current_config = json.loads(row["config"])
-                if row["plugin_id"] in {
-                    "kbrd.render-image",
-                    "kbrd.render-video",
-                }:
+                if row["plugin_id"] in self.MEDIA_PLUGIN_IDS:
                     self._delete_media(
+                        conn,
                         previous_config,
                         keep=self._media_names(current_config),
                     )
@@ -556,7 +568,7 @@ class Workspace:
                 )
                 if cursor.rowcount == 0:
                     return jsonify(error="not found"), 404
-                self._delete_plugin_media(row)
+                self._delete_plugin_media(conn, row)
                 return jsonify(ok=True)
 
         @app.get("/api/workspace/active")
@@ -566,27 +578,19 @@ class Workspace:
                     "SELECT * FROM workspace WHERE active=1 LIMIT 1"
                 ).fetchone()
                 if workspace is not None:
-                    geometry = self.geometry_api._find(
+                    geometry = self.geometry_api.find(
                         conn,
                         workspace["geometry_id"],
                     )
                     return jsonify(
                         workspace=self._item(conn, workspace, True),
-                        geometry=self.geometry_api._row_to_dict(geometry),
+                        geometry=self.geometry_api.row_to_dict(geometry),
                     )
 
-                geometry = conn.execute("""
-                    SELECT * FROM geometry
-                    ORDER BY
-                        active DESC,
-                        CASE WHEN lower(name) = 'default' THEN 0 ELSE 1 END,
-                        name,
-                        id
-                    LIMIT 1
-                """).fetchone()
+                geometry = self.geometry_api.find_default(conn)
                 if geometry is None:
                     return jsonify(error="not found"), 404
                 return jsonify(
                     workspace=None,
-                    geometry=self.geometry_api._row_to_dict(geometry),
+                    geometry=self.geometry_api.row_to_dict(geometry),
                 )

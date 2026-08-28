@@ -12,13 +12,21 @@ GEOMETRY_COLUMNS = """
     id, name, description, author, unit, geometry, svg, active, created_at
 """
 
+DEFAULT_GEOMETRY_ORDER = """
+    ORDER BY
+        active DESC,
+        CASE WHEN lower(name) = 'default' THEN 0 ELSE 1 END,
+        name,
+        id
+"""
+
 
 class Geometry:
     def __init__(self, db: DB):
         self.db = db
 
     @staticmethod
-    def _row_to_dict(row) -> dict:
+    def row_to_dict(row) -> dict:
         geometry = json.loads(row["geometry"])
         layout = layout_geometry(geometry)
         result = {
@@ -63,10 +71,19 @@ class Geometry:
         }
 
     @staticmethod
-    def _find(conn, geometry_id: int):
+    def find(conn, geometry_id: int):
         return conn.execute(
             f"SELECT {GEOMETRY_COLUMNS} FROM geometry WHERE id=?",
             (geometry_id,),
+        ).fetchone()
+
+    @staticmethod
+    def find_default(conn):
+        """Geometry used when no geometry is explicitly active: the active
+        one if any, otherwise the geometry named 'default', otherwise the
+        first one alphabetically."""
+        return conn.execute(
+            f"SELECT {GEOMETRY_COLUMNS} FROM geometry {DEFAULT_GEOMETRY_ORDER} LIMIT 1"
         ).fetchone()
 
     def _write(self, geometry_id: int | None = None):
@@ -108,8 +125,8 @@ class Geometry:
                 status = 200
 
             conn.commit()
-            row = self._find(conn, geometry_id)
-            return jsonify(self._row_to_dict(row)), status
+            row = self.find(conn, geometry_id)
+            return jsonify(self.row_to_dict(row)), status
 
     def register(self, app: Flask) -> None:
         @app.get("/api/geometry")
@@ -118,29 +135,20 @@ class Geometry:
                 rows = conn.execute(
                     f"SELECT {GEOMETRY_COLUMNS} FROM geometry ORDER BY name, id"
                 ).fetchall()
-                return jsonify([self._row_to_dict(row) for row in rows])
+                return jsonify([self.row_to_dict(row) for row in rows])
 
         @app.get("/api/geometry/active")
         def get_active_geometry():
             with self.db.connect() as conn:
-                row = conn.execute(f"""
-                    SELECT {GEOMETRY_COLUMNS}
-                    FROM geometry
-                    ORDER BY
-                        active DESC,
-                        CASE WHEN lower(name) = 'default' THEN 0 ELSE 1 END,
-                        name,
-                        id
-                    LIMIT 1
-                """).fetchone()
+                row = self.find_default(conn)
                 if row is None:
                     return jsonify(error="not found"), 404
-                return jsonify(self._row_to_dict(row))
+                return jsonify(self.row_to_dict(row))
 
         @app.put("/api/geometry/<int:geometry_id>/activate")
         def activate_geometry(geometry_id: int):
             with self.db.connect() as conn:
-                row = self._find(conn, geometry_id)
+                row = self.find(conn, geometry_id)
                 if row is None:
                     return jsonify(error="not found"), 404
                 conn.execute("UPDATE geometry SET active=0")
@@ -149,15 +157,15 @@ class Geometry:
                     (geometry_id,),
                 )
                 conn.execute("UPDATE workspace SET active=0")
-                return jsonify(self._row_to_dict(self._find(conn, geometry_id)))
+                return jsonify(self.row_to_dict(self.find(conn, geometry_id)))
 
         @app.get("/api/geometry/<int:geometry_id>")
         def get_geometry(geometry_id: int):
             with self.db.connect() as conn:
-                row = self._find(conn, geometry_id)
+                row = self.find(conn, geometry_id)
                 if row is None:
                     return jsonify(error="not found"), 404
-                return jsonify(self._row_to_dict(row))
+                return jsonify(self.row_to_dict(row))
 
         @app.post("/api/geometry")
         def create_geometry():
