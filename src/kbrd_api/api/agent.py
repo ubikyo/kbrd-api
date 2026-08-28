@@ -86,6 +86,24 @@ class Agent:
         def quit_application(application_id):
             return self._application_action(application_id, "quit")
 
+        @app.get("/api/browsers")
+        def list_browsers():
+            return self._proxy("GET", "/v1/browsers")
+
+        @app.post("/api/browsers/<path:browser_id>/open")
+        def open_browser(browser_id):
+            browser_id = browser_id.strip()
+            if not browser_id:
+                return jsonify(error="invalid browser id"), 400
+            url = str((request.get_json(silent=True) or {}).get("url") or "").strip()
+            if not url:
+                return jsonify(error="missing url"), 400
+            encoded_id = quote(browser_id, safe="")
+            body = json.dumps({"url": url}).encode()
+            return self._proxy(
+                "POST", f"/v1/browsers/{encoded_id}/open", body=body
+            )
+
     def _application_action(self, application_id: str, action: str):
         application_id = application_id.strip()
         if not application_id:
@@ -103,17 +121,16 @@ class Agent:
             return None
         return agent
 
-    def _proxy(self, method: str, path: str):
+    def _proxy(self, method: str, path: str, body: bytes | None = None):
         agent = self._current()
         if agent is None:
             return jsonify(error="KBRD Agent is unavailable"), 503
         host = f"[{agent.host}]" if ":" in agent.host else agent.host
         target = f"http://{host}:{agent.port}{path}"
-        forwarded = Request(
-            target,
-            method=method,
-            headers={"Authorization": f"Bearer {agent.token}"},
-        )
+        headers = {"Authorization": f"Bearer {agent.token}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        forwarded = Request(target, data=body, method=method, headers=headers)
         try:
             with self._opener(forwarded, timeout=15) as response:
                 payload = response.read()

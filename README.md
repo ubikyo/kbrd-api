@@ -15,6 +15,8 @@ KBRD-API :
 |`GET /api/applications`|Applications découvertes par l'agent|
 |`POST /api/applications/<id>/launch`|Lance une application|
 |`POST /api/applications/<id>/quit`|Quitte une application|
+|`GET /api/browsers`|Navigateurs découverts par l'agent|
+|`POST /api/browsers/<id>/open`|Ouvre une URL (`{"url": "..."}`) dans le navigateur|
 
 KBRD-API relaie ces requêtes vers l'agent enregistré. Une inscription qui n'a
 pas été renouvelée depuis 30 secondes est considérée comme inactive.

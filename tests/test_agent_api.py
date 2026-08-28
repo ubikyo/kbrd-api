@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -95,6 +96,57 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(
             requests[-1][0].get_header("Authorization"), "Bearer secret"
         )
+
+    def test_registers_and_forwards_browser_open_requests(self):
+        requests = []
+
+        def open_request(outbound, timeout):
+            requests.append((outbound, timeout))
+            if outbound.full_url.endswith("/v1/browsers"):
+                return FakeResponse(
+                    b'[{"id":"com.example.Browser","name":"Example"}]'
+                )
+            return FakeResponse(b'{"ok":true}')
+
+        client = self._client(Agent(clock=lambda: 100, opener=open_request))
+        client.post(
+            "/api/agent/register",
+            json={
+                "name": "Mac",
+                "platform": "macos",
+                "port": 8090,
+                "token": "secret",
+                "version": "1.0.0",
+            },
+            environ_base={"REMOTE_ADDR": "192.0.2.10"},
+        )
+
+        listed = client.get("/api/browsers")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json[0]["id"], "com.example.Browser")
+
+        opened = client.post(
+            "/api/browsers/com.example.Browser/open",
+            json={"url": "https://example.com"},
+        )
+        self.assertEqual(opened.status_code, 200)
+        self.assertEqual(
+            requests[-1][0].full_url,
+            "http://192.0.2.10:8090/v1/browsers/com.example.Browser/open",
+        )
+        self.assertEqual(
+            requests[-1][0].get_header("Authorization"), "Bearer secret"
+        )
+        self.assertEqual(
+            json.loads(requests[-1][0].data), {"url": "https://example.com"}
+        )
+
+    def test_open_browser_requires_a_url(self):
+        client = self._client(Agent(clock=lambda: 100))
+        response = client.post(
+            "/api/browsers/com.example.Browser/open", json={}
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_reports_an_unreachable_agent(self):
         def unavailable(*args, **kwargs):
