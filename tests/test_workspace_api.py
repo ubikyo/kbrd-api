@@ -87,6 +87,66 @@ class WorkspaceApiTest(unittest.TestCase):
         active = self.client.get("/api/workspace/active")
         self.assertIsNone(active.json["workspace"])
 
+    def test_saves_and_loads_factory_layout_per_workspace(self):
+        first = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "First"},
+        ).json
+        second = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Second"},
+        ).json
+        self.assertIsNone(first["factory_layout"])
+
+        saved = self.client.put(
+            f"/api/workspace/{first['id']}/factory-layout",
+            json={
+                "factory_layout": {
+                    "rowOverrides": {"0": [1, 2]},
+                    "cells": {"1": {"typeId": "kbrd.layout-key", "unit": 1}},
+                    "mergeGroups": [],
+                },
+            },
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            saved.json["factory_layout"]["rowOverrides"], {"0": [1, 2]}
+        )
+
+        # Each workspace keeps its own disposition — the other workspace on
+        # the same geometry is untouched.
+        untouched = self.client.get("/api/workspace").json
+        by_id = {item["id"]: item for item in untouched}
+        self.assertEqual(
+            by_id[first["id"]]["factory_layout"]["cells"]["1"]["unit"], 1
+        )
+        self.assertIsNone(by_id[second["id"]]["factory_layout"])
+
+        cleared = self.client.put(
+            f"/api/workspace/{first['id']}/factory-layout",
+            json={"factory_layout": None},
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json["factory_layout"])
+
+    def test_factory_layout_rejects_invalid_payload_and_missing_workspace(self):
+        workspace = self.client.post(
+            f"/api/geometry/{self.geometry['id']}/workspace",
+            json={"name": "Invalid layout"},
+        ).json
+
+        invalid = self.client.put(
+            f"/api/workspace/{workspace['id']}/factory-layout",
+            json={"factory_layout": "not an object"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        missing = self.client.put(
+            "/api/workspace/999/factory-layout",
+            json={"factory_layout": {}},
+        )
+        self.assertEqual(missing.status_code, 404)
+
     def test_workspace_requires_an_existing_geometry(self):
         response = self.client.post(
             "/api/geometry/999/workspace",

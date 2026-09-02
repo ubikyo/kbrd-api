@@ -87,6 +87,7 @@ class Workspace:
         }
 
     def _item(self, conn, row, include_plugins=False) -> dict:
+        factory_layout = row["factory_layout"]
         result = {
             "id": row["id"],
             "geometry_id": row["geometry_id"],
@@ -94,6 +95,11 @@ class Workspace:
             "description": row["description"],
             "active": bool(row["active"]),
             "created_at": row["created_at"],
+            # KBRD-WEB's own `<Factory>` grid disposition (rows/cells/merge
+            # groups) — opaque to KBRD-API, stored and returned as-is.
+            "factory_layout": (
+                json.loads(factory_layout) if factory_layout else None
+            ),
         }
         if include_plugins:
             plugins = conn.execute(
@@ -282,6 +288,32 @@ class Workspace:
                 )
                 if cursor.rowcount == 0:
                     return jsonify(error="not found"), 404
+                row = self._workspace(conn, workspace_id)
+                return jsonify(self._item(conn, row, True))
+
+        @app.put("/api/workspace/<int:workspace_id>/factory-layout")
+        def update_factory_layout(workspace_id):
+            data = request.get_json(silent=True) or {}
+            factory_layout = data.get("factory_layout")
+            if factory_layout is not None and not isinstance(factory_layout, dict):
+                return jsonify(error="factory_layout must be an object or null"), 400
+
+            with self.db.connect() as conn:
+                if self._workspace(conn, workspace_id) is None:
+                    return jsonify(error="workspace not found"), 404
+                conn.execute(
+                    "UPDATE workspace SET factory_layout=? WHERE id=?",
+                    (
+                        json.dumps(
+                            factory_layout,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        if factory_layout is not None
+                        else None,
+                        workspace_id,
+                    ),
+                )
                 row = self._workspace(conn, workspace_id)
                 return jsonify(self._item(conn, row, True))
 

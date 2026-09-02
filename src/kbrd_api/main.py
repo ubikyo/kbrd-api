@@ -3,9 +3,11 @@ from flask import Flask
 from kbrd_api.config import Config
 from kbrd_api.db import DB
 from kbrd_api.api.health import Health
+from kbrd_api.api.board import Board
 from kbrd_api.api.geometry import Geometry
 from kbrd_api.api.workspace import Workspace
 from kbrd_api.api.agent import Agent
+from kbrd_api.api.device import Device
 
 
 def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
@@ -18,6 +20,8 @@ def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
 
     Health().register(app)
     Agent().register(app)
+    Device().register(app)
+    Board(db).register(app)
     geometry = Geometry(db)
     geometry.register(app)
     Workspace(

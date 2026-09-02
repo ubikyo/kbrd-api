@@ -9,8 +9,15 @@ from .geometry_svg import render_geometry_svg
 
 
 GEOMETRY_COLUMNS = """
-    id, name, description, author, unit, geometry, svg, active, created_at
+    id, name, description, author, unit, geometry, svg, active, created_at,
+    unit_mm, gap_mm, max_columns, max_rows
 """
+
+# Matches kbrd-web's own `DEFAULT_LAYOUT_SETTINGS` — used when a client
+# doesn't send one of these fields (e.g. a plain rename via the Layout
+# editor, which only ever touches name/description/author).
+DEFAULT_UNIT_MM = 19.05
+DEFAULT_GAP_MM = 3
 
 DEFAULT_GEOMETRY_ORDER = """
     ORDER BY
@@ -40,8 +47,47 @@ class Geometry:
             "active": bool(row["active"]),
             "created_at": row["created_at"],
             "layout": asdict(layout),
+            # Settings › Geometry's Caps size / Gap size (see kbrd-web's
+            # `LayoutSettings`) — opaque numbers to KBRD-API, just stored
+            # and returned as-is so they survive a reload / a switch back
+            # to this geometry. The physical screen's width/height live on
+            # `board` instead — see its own comment in `db.py`.
+            "unit_mm": row["unit_mm"],
+            "gap_mm": row["gap_mm"],
+            # How many 1U reference items fit, in each direction — `null`
+            # means "as many as fit" (kbrd-web computes and clamps to that
+            # ceiling itself); see the column's own comment in `db.py`.
+            "max_columns": row["max_columns"],
+            "max_rows": row["max_rows"],
         }
         return result
+
+    @staticmethod
+    def _positive_number(data, key: str, default: float) -> float:
+        value = data.get(key, default)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number")
+        if number < 0:
+            raise ValueError(f"{key} must not be negative")
+        return number
+
+    @staticmethod
+    def _optional_positive_number(data, key: str):
+        # Max width/height (1U) — kbrd-web's own NumberInput steps these by
+        # 0.25 (like a cell's own Unit, see `MIN_UNIT`/`UNIT_STEP`), not by
+        # a whole 1U item at a time, so this accepts either int or float —
+        # only `null` (the default: "as many as fit") and a value below the
+        # 1-item floor are rejected.
+        if key not in data or data[key] is None:
+            return None
+        value = data[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a number or null")
+        if value < 1:
+            raise ValueError(f"{key} must be at least 1")
+        return float(value)
 
     @staticmethod
     def _payload(data) -> dict:
@@ -57,11 +103,20 @@ class Geometry:
 
         geometry = data.get("geometry")
         layout = layout_geometry(geometry)
+
         return {
             "name": name,
             "description": str(data.get("description") or "").strip(),
             "author": str(data.get("author") or "").strip(),
             "unit": unit,
+            "unit_mm": Geometry._positive_number(
+                data, "unit_mm", DEFAULT_UNIT_MM
+            ),
+            "gap_mm": Geometry._positive_number(
+                data, "gap_mm", DEFAULT_GAP_MM
+            ),
+            "max_columns": Geometry._optional_positive_number(data, "max_columns"),
+            "max_rows": Geometry._optional_positive_number(data, "max_rows"),
             "geometry": json.dumps(
                 geometry,
                 ensure_ascii=False,
@@ -99,13 +154,20 @@ class Geometry:
             payload["unit"],
             payload["geometry"],
             payload["svg"],
+            payload["unit_mm"],
+            payload["gap_mm"],
+            payload["max_columns"],
+            payload["max_rows"],
         )
         with self.db.connect() as conn:
             if geometry_id is None:
                 cursor = conn.execute(
                     """
-                    INSERT INTO geometry (name, description, author, unit, geometry, svg)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO geometry (
+                        name, description, author, unit, geometry, svg,
+                        unit_mm, gap_mm, max_columns, max_rows
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     fields,
                 )
@@ -115,7 +177,8 @@ class Geometry:
                 cursor = conn.execute(
                     """
                     UPDATE geometry
-                    SET name=?, description=?, author=?, unit=?, geometry=?, svg=?
+                    SET name=?, description=?, author=?, unit=?, geometry=?, svg=?,
+                        unit_mm=?, gap_mm=?, max_columns=?, max_rows=?
                     WHERE id=?
                     """,
                     (*fields, geometry_id),
