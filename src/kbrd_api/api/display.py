@@ -3,10 +3,10 @@ from flask import Flask, jsonify, request
 from kbrd_api.db import DB
 
 
-class Board:
+class Display:
     """The physical screen's own width/height — a single row shared by
-    every layout (see `db.py`'s own comment on the `board` table for why
-    this doesn't live on `geometry` alongside Caps size / Gap size)."""
+    every layout (see `db.py`'s own comment on the `display` table for why
+    this doesn't live on `layout` alongside Caps size / Gap size)."""
 
     def __init__(self, db: DB):
         self.db = db
@@ -30,16 +30,16 @@ class Board:
         return number
 
     def register(self, app: Flask) -> None:
-        @app.get("/api/board")
-        def get_board():
+        @app.get("/api/display")
+        def get_display():
             with self.db.connect() as conn:
                 row = conn.execute(
-                    "SELECT physical_width_mm, physical_height_mm FROM board WHERE id=1"
+                    "SELECT physical_width_mm, physical_height_mm FROM display WHERE id=1"
                 ).fetchone()
                 return jsonify(self._row_to_dict(row))
 
-        @app.put("/api/board")
-        def update_board():
+        @app.put("/api/display")
+        def update_display():
             data = request.get_json(silent=True)
             if not isinstance(data, dict):
                 return jsonify(error="body must be an object"), 400
@@ -56,13 +56,13 @@ class Board:
             with self.db.connect() as conn:
                 conn.execute(
                     """
-                    UPDATE board SET physical_width_mm=?, physical_height_mm=?
+                    UPDATE display SET physical_width_mm=?, physical_height_mm=?
                     WHERE id=1
                     """,
                     (width, height),
                 )
                 conn.commit()
                 row = conn.execute(
-                    "SELECT physical_width_mm, physical_height_mm FROM board WHERE id=1"
+                    "SELECT physical_width_mm, physical_height_mm FROM display WHERE id=1"
                 ).fetchone()
                 return jsonify(self._row_to_dict(row))

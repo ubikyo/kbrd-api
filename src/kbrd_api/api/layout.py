@@ -8,7 +8,7 @@ from .geometry_layout import layout_geometry
 from .geometry_svg import render_geometry_svg
 
 
-GEOMETRY_COLUMNS = """
+LAYOUT_COLUMNS = """
     id, name, description, author, unit, geometry, svg, active, created_at,
     unit_mm, gap_mm, max_columns, max_rows
 """
@@ -19,7 +19,7 @@ GEOMETRY_COLUMNS = """
 DEFAULT_UNIT_MM = 19.05
 DEFAULT_GAP_MM = 3
 
-DEFAULT_GEOMETRY_ORDER = """
+DEFAULT_LAYOUT_ORDER = """
     ORDER BY
         active DESC,
         CASE WHEN lower(name) = 'default' THEN 0 ELSE 1 END,
@@ -28,7 +28,7 @@ DEFAULT_GEOMETRY_ORDER = """
 """
 
 
-class Geometry:
+class Layout:
     def __init__(self, db: DB):
         self.db = db
 
@@ -50,8 +50,8 @@ class Geometry:
             # Settings › Geometry's Caps size / Gap size (see kbrd-web's
             # `LayoutSettings`) — opaque numbers to KBRD-API, just stored
             # and returned as-is so they survive a reload / a switch back
-            # to this geometry. The physical screen's width/height live on
-            # `board` instead — see its own comment in `db.py`.
+            # to this layout. The physical screen's width/height live on
+            # `display` instead — see its own comment in `db.py`.
             "unit_mm": row["unit_mm"],
             "gap_mm": row["gap_mm"],
             # How many 1U reference items fit, in each direction — `null`
@@ -109,14 +109,14 @@ class Geometry:
             "description": str(data.get("description") or "").strip(),
             "author": str(data.get("author") or "").strip(),
             "unit": unit,
-            "unit_mm": Geometry._positive_number(
+            "unit_mm": Layout._positive_number(
                 data, "unit_mm", DEFAULT_UNIT_MM
             ),
-            "gap_mm": Geometry._positive_number(
+            "gap_mm": Layout._positive_number(
                 data, "gap_mm", DEFAULT_GAP_MM
             ),
-            "max_columns": Geometry._optional_positive_number(data, "max_columns"),
-            "max_rows": Geometry._optional_positive_number(data, "max_rows"),
+            "max_columns": Layout._optional_positive_number(data, "max_columns"),
+            "max_rows": Layout._optional_positive_number(data, "max_rows"),
             "geometry": json.dumps(
                 geometry,
                 ensure_ascii=False,
@@ -126,22 +126,22 @@ class Geometry:
         }
 
     @staticmethod
-    def find(conn, geometry_id: int):
+    def find(conn, layout_id: int):
         return conn.execute(
-            f"SELECT {GEOMETRY_COLUMNS} FROM geometry WHERE id=?",
-            (geometry_id,),
+            f"SELECT {LAYOUT_COLUMNS} FROM layout WHERE id=?",
+            (layout_id,),
         ).fetchone()
 
     @staticmethod
     def find_default(conn):
-        """Geometry used when no geometry is explicitly active: the active
-        one if any, otherwise the geometry named 'default', otherwise the
-        first one alphabetically."""
+        """Layout used when no layout is explicitly active: the active one
+        if any, otherwise the layout named 'default', otherwise the first
+        one alphabetically."""
         return conn.execute(
-            f"SELECT {GEOMETRY_COLUMNS} FROM geometry {DEFAULT_GEOMETRY_ORDER} LIMIT 1"
+            f"SELECT {LAYOUT_COLUMNS} FROM layout {DEFAULT_LAYOUT_ORDER} LIMIT 1"
         ).fetchone()
 
-    def _write(self, geometry_id: int | None = None):
+    def _write(self, layout_id: int | None = None):
         try:
             payload = self._payload(request.get_json(silent=True))
         except (TypeError, ValueError) as exc:
@@ -160,10 +160,10 @@ class Geometry:
             payload["max_rows"],
         )
         with self.db.connect() as conn:
-            if geometry_id is None:
+            if layout_id is None:
                 cursor = conn.execute(
                     """
-                    INSERT INTO geometry (
+                    INSERT INTO layout (
                         name, description, author, unit, geometry, svg,
                         unit_mm, gap_mm, max_columns, max_rows
                     )
@@ -171,79 +171,79 @@ class Geometry:
                     """,
                     fields,
                 )
-                geometry_id = cursor.lastrowid
+                layout_id = cursor.lastrowid
                 status = 201
             else:
                 cursor = conn.execute(
                     """
-                    UPDATE geometry
+                    UPDATE layout
                     SET name=?, description=?, author=?, unit=?, geometry=?, svg=?,
                         unit_mm=?, gap_mm=?, max_columns=?, max_rows=?
                     WHERE id=?
                     """,
-                    (*fields, geometry_id),
+                    (*fields, layout_id),
                 )
                 if cursor.rowcount == 0:
                     return jsonify(error="not found"), 404
                 status = 200
 
             conn.commit()
-            row = self.find(conn, geometry_id)
+            row = self.find(conn, layout_id)
             return jsonify(self.row_to_dict(row)), status
 
     def register(self, app: Flask) -> None:
-        @app.get("/api/geometry")
-        def list_geometries():
+        @app.get("/api/layout")
+        def list_layouts():
             with self.db.connect() as conn:
                 rows = conn.execute(
-                    f"SELECT {GEOMETRY_COLUMNS} FROM geometry ORDER BY name, id"
+                    f"SELECT {LAYOUT_COLUMNS} FROM layout ORDER BY name, id"
                 ).fetchall()
                 return jsonify([self.row_to_dict(row) for row in rows])
 
-        @app.get("/api/geometry/active")
-        def get_active_geometry():
+        @app.get("/api/layout/active")
+        def get_active_layout():
             with self.db.connect() as conn:
                 row = self.find_default(conn)
                 if row is None:
                     return jsonify(error="not found"), 404
                 return jsonify(self.row_to_dict(row))
 
-        @app.put("/api/geometry/<int:geometry_id>/activate")
-        def activate_geometry(geometry_id: int):
+        @app.put("/api/layout/<int:layout_id>/activate")
+        def activate_layout(layout_id: int):
             with self.db.connect() as conn:
-                row = self.find(conn, geometry_id)
+                row = self.find(conn, layout_id)
                 if row is None:
                     return jsonify(error="not found"), 404
-                conn.execute("UPDATE geometry SET active=0")
+                conn.execute("UPDATE layout SET active=0")
                 conn.execute(
-                    "UPDATE geometry SET active=1 WHERE id=?",
-                    (geometry_id,),
+                    "UPDATE layout SET active=1 WHERE id=?",
+                    (layout_id,),
                 )
-                conn.execute("UPDATE workspace SET active=0")
-                return jsonify(self.row_to_dict(self.find(conn, geometry_id)))
+                conn.execute("UPDATE layer SET active=0")
+                return jsonify(self.row_to_dict(self.find(conn, layout_id)))
 
-        @app.get("/api/geometry/<int:geometry_id>")
-        def get_geometry(geometry_id: int):
+        @app.get("/api/layout/<int:layout_id>")
+        def get_layout(layout_id: int):
             with self.db.connect() as conn:
-                row = self.find(conn, geometry_id)
+                row = self.find(conn, layout_id)
                 if row is None:
                     return jsonify(error="not found"), 404
                 return jsonify(self.row_to_dict(row))
 
-        @app.post("/api/geometry")
-        def create_geometry():
+        @app.post("/api/layout")
+        def create_layout():
             return self._write()
 
-        @app.put("/api/geometry/<int:geometry_id>")
-        def update_geometry(geometry_id: int):
-            return self._write(geometry_id)
+        @app.put("/api/layout/<int:layout_id>")
+        def update_layout(layout_id: int):
+            return self._write(layout_id)
 
-        @app.delete("/api/geometry/<int:geometry_id>")
-        def delete_geometry(geometry_id: int):
+        @app.delete("/api/layout/<int:layout_id>")
+        def delete_layout(layout_id: int):
             with self.db.connect() as conn:
                 cursor = conn.execute(
-                    "DELETE FROM geometry WHERE id=?",
-                    (geometry_id,),
+                    "DELETE FROM layout WHERE id=?",
+                    (layout_id,),
                 )
                 conn.commit()
                 if cursor.rowcount == 0:

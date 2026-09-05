@@ -3,9 +3,9 @@ from flask import Flask
 from kbrd_api.config import Config
 from kbrd_api.db import DB
 from kbrd_api.api.health import Health
-from kbrd_api.api.board import Board
-from kbrd_api.api.geometry import Geometry
-from kbrd_api.api.workspace import Workspace
+from kbrd_api.api.display import Display
+from kbrd_api.api.layout import Layout
+from kbrd_api.api.layer import Layer
 from kbrd_api.api.agent import Agent
 from kbrd_api.api.device import Device
 
@@ -21,12 +21,12 @@ def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
     Health().register(app)
     Agent().register(app)
     Device().register(app)
-    Board(db).register(app)
-    geometry = Geometry(db)
-    geometry.register(app)
-    Workspace(
+    Display(db).register(app)
+    layout = Layout(db)
+    layout.register(app)
+    Layer(
         db,
-        geometry,
+        layout,
         cfg.media_dir,
         cfg.font_dir,
         cfg.bundled_font_dir,

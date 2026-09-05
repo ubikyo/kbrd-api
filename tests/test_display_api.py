@@ -11,7 +11,7 @@ except ModuleNotFoundError:
 
 
 @unittest.skipIf(create_app is None, "Flask is not installed")
-class BoardApiTest(unittest.TestCase):
+class DisplayApiTest(unittest.TestCase):
     def setUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(handle)
@@ -23,7 +23,7 @@ class BoardApiTest(unittest.TestCase):
         os.unlink(self.db_path)
 
     def test_defaults_to_kbrd_devs_reference_panel(self):
-        response = self.client.get("/api/board")
+        response = self.client.get("/api/display")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json, {
             "physical_width_mm": 216,
@@ -31,7 +31,7 @@ class BoardApiTest(unittest.TestCase):
         })
 
     def test_updates_and_persists_the_single_row(self):
-        updated = self.client.put("/api/board", json={
+        updated = self.client.put("/api/display", json={
             "physical_width_mm": 220,
             "physical_height_mm": 140,
         })
@@ -41,19 +41,19 @@ class BoardApiTest(unittest.TestCase):
             "physical_height_mm": 140,
         })
 
-        fetched = self.client.get("/api/board")
+        fetched = self.client.get("/api/display")
         self.assertEqual(fetched.json, {
             "physical_width_mm": 220,
             "physical_height_mm": 140,
         })
 
-    def test_is_shared_across_geometries_not_per_layout(self):
-        first = self.client.post("/api/geometry", json={
+    def test_is_shared_across_layouts_not_per_layout(self):
+        first = self.client.post("/api/layout", json={
             "name": "First",
             "unit": "mm",
             "geometry": [],
         }).json
-        second = self.client.post("/api/geometry", json={
+        second = self.client.post("/api/layout", json={
             "name": "Second",
             "unit": "mm",
             "geometry": [],
@@ -61,19 +61,19 @@ class BoardApiTest(unittest.TestCase):
         self.assertNotIn("physical_width_mm", first)
         self.assertNotIn("physical_width_mm", second)
 
-        self.client.put("/api/board", json={
+        self.client.put("/api/display", json={
             "physical_width_mm": 300,
             "physical_height_mm": 150,
         })
-        # Switching the active geometry doesn't touch the board's own row.
-        self.client.put(f"/api/geometry/{second['id']}/activate")
-        self.assertEqual(self.client.get("/api/board").json, {
+        # Switching the active layout doesn't touch the display's own row.
+        self.client.put(f"/api/layout/{second['id']}/activate")
+        self.assertEqual(self.client.get("/api/display").json, {
             "physical_width_mm": 300,
             "physical_height_mm": 150,
         })
 
     def test_rejects_invalid_dimensions(self):
-        response = self.client.put("/api/board", json={
+        response = self.client.put("/api/display", json={
             "physical_width_mm": 0,
             "physical_height_mm": 135,
         })
@@ -82,7 +82,7 @@ class BoardApiTest(unittest.TestCase):
             response.json["error"], "physical_width_mm must be greater than zero"
         )
 
-        response = self.client.put("/api/board", json={
+        response = self.client.put("/api/display", json={
             "physical_width_mm": "not a number",
             "physical_height_mm": 135,
         })
