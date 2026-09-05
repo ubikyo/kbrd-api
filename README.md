@@ -43,18 +43,6 @@ HOME=/home/kbrd /usr/bin/kbrd-api
 
 ## Development
 
-Use this commands to run `KBRD-API` without a Raspberry.
+Use this command to run `KBRD-API` without a Raspberry.
 
-    cd kbrd-api
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install -e . flask
-
-    python3 -c "
-       from kbrd_api.config import Config
-       from kbrd_api.main import create_app
-
-       cfg = Config(db_path='data/kbrd.db', media_dir='data/media', font_dir='data/fonts')
-       app, cfg = create_app(cfg)
-       app.run(host=cfg.host, port=cfg.port, debug=True)
-    "
+    ./dev.sh

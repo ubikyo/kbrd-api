@@ -11,6 +11,7 @@ src/kbrd_api.egg-info/entry_points.txt
 src/kbrd_api.egg-info/top_level.txt
 src/kbrd_api/api/__init__.py
 src/kbrd_api/api/agent.py
+src/kbrd_api/api/board.py
 src/kbrd_api/api/device.py
 src/kbrd_api/api/geometry.py
 src/kbrd_api/api/geometry_layout.py
@@ -18,6 +19,7 @@ src/kbrd_api/api/geometry_svg.py
 src/kbrd_api/api/health.py
 src/kbrd_api/api/workspace.py
 tests/test_agent_api.py
+tests/test_board_api.py
 tests/test_device_api.py
 tests/test_geometry_api.py
 tests/test_geometry_layout.py
