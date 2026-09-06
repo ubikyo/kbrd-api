@@ -204,7 +204,9 @@ class LayerApiTest(unittest.TestCase):
         ).json
         self.client.put(f"/api/layer/{layer['id']}/activate")
         listed = self.client.get("/api/layer")
-        self.assertEqual([item["id"] for item in listed.json], [layer["id"]])
+        # `self.layout` (from `setUp`) already started with its own
+        # "Default" layer (see `Layout._write`) — this one's on top of it.
+        self.assertIn(layer["id"], [item["id"] for item in listed.json])
 
         other = self.client.post("/api/layout", json={
             "name": "Other",
@@ -374,6 +376,225 @@ class LayerApiTest(unittest.TestCase):
             response.json["key_properties"],
             [{"key_ref": "B", "config": {"keyMode": "toggle"}}],
         )
+
+    def test_duplicate_from_also_copies_key_property(self):
+        layer = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Duplicated property"},
+        ).json
+        self.client.post(
+            f"/api/layer/{layer['id']}/keys/A/plugins",
+            json={"plugin_id": "kbrd.render-label", "config": {"text": "Source"}},
+        )
+        self.client.put(
+            f"/api/layer/{layer['id']}/keys/A/properties",
+            json={"config": {"keyMode": "toggle"}},
+        )
+
+        response = self.client.post(
+            f"/api/layer/{layer['id']}/keys/B/plugins/duplicate-from",
+            json={"source_key_ref": "A"},
+        )
+        self.assertEqual(response.status_code, 201)
+
+        activated = self.client.put(f"/api/layer/{layer['id']}/activate")
+        self.assertEqual(
+            sorted(activated.json["key_properties"], key=lambda item: item["key_ref"]),
+            [
+                {"key_ref": "A", "config": {"keyMode": "toggle"}},
+                {"key_ref": "B", "config": {"keyMode": "toggle"}},
+            ],
+        )
+
+    def test_duplicate_layer_clones_factory_layout_plugins_and_properties(self):
+        layer = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Original"},
+        ).json
+        self.client.put(
+            f"/api/layer/{layer['id']}/factory-layout",
+            json={"factory_layout": {"rowOverrides": {}, "cells": {}, "mergeGroups": []}},
+        )
+        self.client.post(
+            f"/api/layer/{layer['id']}/keys/A/plugins",
+            json={"plugin_id": "kbrd.render-label", "config": {"text": "Source"}},
+        )
+        self.client.put(
+            f"/api/layer/{layer['id']}/keys/A/properties",
+            json={"config": {"keyMode": "toggle"}},
+        )
+
+        response = self.client.post(
+            f"/api/layer/{layer['id']}/duplicate",
+            json={"name": "Copy", "description": "A copy"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        clone = response.json
+        self.assertNotEqual(clone["id"], layer["id"])
+        self.assertEqual(clone["name"], "Copy")
+        self.assertEqual(clone["layout_id"], layer["layout_id"])
+        self.assertEqual(
+            clone["factory_layout"],
+            {"rowOverrides": {}, "cells": {}, "mergeGroups": []},
+        )
+        self.assertEqual([plugin["key_ref"] for plugin in clone["plugins"]], ["A"])
+        self.assertEqual(clone["plugins"][0]["config"], {"text": "Source"})
+        self.assertEqual(
+            clone["key_properties"], [{"key_ref": "A", "config": {"keyMode": "toggle"}}]
+        )
+
+        # Editing the clone must never touch the source — independent rows,
+        # not shared references.
+        self.client.put(
+            f"/api/key-plugin/{clone['plugins'][0]['id']}",
+            json={"config": {"text": "Edited"}},
+        )
+        layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        source_after = next(item for item in layers if item["id"] == layer["id"])
+        self.assertEqual(source_after["plugins"][0]["config"], {"text": "Source"})
+
+    def test_replace_layer_overwrites_target_content(self):
+        source = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Source"},
+        ).json
+        self.client.post(
+            f"/api/layer/{source['id']}/keys/A/plugins",
+            json={"plugin_id": "kbrd.render-label", "config": {"text": "Fresh"}},
+        )
+        target = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Target"},
+        ).json
+        self.client.post(
+            f"/api/layer/{target['id']}/keys/B/plugins",
+            json={"plugin_id": "kbrd.render-rectangle", "config": {"color": "#000"}},
+        )
+
+        response = self.client.post(
+            f"/api/layer/{target['id']}/replace",
+            json={"source_id": source["id"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        replaced = response.json
+        self.assertEqual(replaced["id"], target["id"])
+        self.assertEqual(replaced["name"], "Target")
+        self.assertEqual([plugin["key_ref"] for plugin in replaced["plugins"]], ["A"])
+        self.assertEqual(replaced["plugins"][0]["config"], {"text": "Fresh"})
+        # Source untouched.
+        layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        source_after = next(item for item in layers if item["id"] == source["id"])
+        self.assertEqual([plugin["key_ref"] for plugin in source_after["plugins"]], ["A"])
+
+    def test_duplicate_layout_clones_geometry_and_every_layer(self):
+        layer_a = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Layer A"},
+        ).json
+        self.client.post(
+            f"/api/layer/{layer_a['id']}/keys/A/plugins",
+            json={"plugin_id": "kbrd.render-label", "config": {"text": "A"}},
+        )
+        self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Layer B"},
+        )
+
+        response = self.client.post(
+            f"/api/layout/{self.layout['id']}/duplicate",
+            json={"name": "Layout copy"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        clone = response.json
+        self.assertNotEqual(clone["id"], self.layout["id"])
+        self.assertEqual(clone["name"], "Layout copy")
+        self.assertEqual(clone["geometry"], self.layout["geometry"])
+        self.assertFalse(clone["active"])
+
+        clone_layers = self.client.get(f"/api/layout/{clone['id']}/layer").json
+        self.assertEqual(
+            sorted(layer["name"] for layer in clone_layers),
+            # "Default" comes along too — every layout (including
+            # `self.layout`, from `setUp`) starts with one.
+            ["Default", "Layer A", "Layer B"],
+        )
+        cloned_layer_a = next(l for l in clone_layers if l["name"] == "Layer A")
+        self.assertEqual(
+            [plugin["key_ref"] for plugin in cloned_layer_a["plugins"]], ["A"]
+        )
+
+    def test_replace_layout_overwrites_geometry_and_layers(self):
+        source_layout = self.client.post("/api/layout", json={
+            "name": "Source layout",
+            "unit": "mm",
+            "geometry": [{"elements": [[{"name": "X", "size": 12}]]}],
+        }).json
+        source_layer = self.client.post(
+            f"/api/layout/{source_layout['id']}/layer",
+            json={"name": "Source layer"},
+        ).json
+        self.client.post(
+            f"/api/layer/{source_layer['id']}/keys/X/plugins",
+            json={"plugin_id": "kbrd.render-label", "config": {"text": "X"}},
+        )
+        target_layer = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Target layer"},
+        ).json
+
+        response = self.client.post(
+            f"/api/layout/{self.layout['id']}/replace",
+            json={"source_id": source_layout["id"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        replaced = response.json
+        self.assertEqual(replaced["id"], self.layout["id"])
+        self.assertEqual(replaced["geometry"], source_layout["geometry"])
+
+        layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        # "Default" comes along too — `source_layout` started with one of
+        # its own (see `Layout._write`), and it's a real layer belonging
+        # to the source, cascaded like any other.
+        self.assertEqual(
+            sorted(layer["name"] for layer in layers), ["Default", "Source layer"]
+        )
+        source_layer_after = next(l for l in layers if l["name"] == "Source layer")
+        self.assertEqual(
+            [plugin["key_ref"] for plugin in source_layer_after["plugins"]], ["X"]
+        )
+        # The target's own previous layers are really gone, not just hidden.
+        self.assertIsNone(
+            next((l for l in layers if l["id"] == target_layer["id"]), None)
+        )
+
+    def test_creating_a_layout_creates_a_default_layer(self):
+        layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        self.assertEqual([layer["name"] for layer in layers], ["Default"])
+
+    def test_cannot_delete_the_last_layer_but_can_delete_any_other(self):
+        # `self.layout` already has its own "Default" — deleting it while
+        # it's the only one must be rejected.
+        default_layer = self.client.get(
+            f"/api/layout/{self.layout['id']}/layer"
+        ).json[0]
+        rejected = self.client.delete(f"/api/layer/{default_layer['id']}")
+        self.assertEqual(rejected.status_code, 400)
+        still_there = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        self.assertEqual([layer["id"] for layer in still_there], [default_layer["id"]])
+
+        # A second layer makes either one deletable again.
+        second_layer = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Second"},
+        ).json
+        allowed = self.client.delete(f"/api/layer/{default_layer['id']}")
+        self.assertEqual(allowed.status_code, 200)
+        remaining = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
+        self.assertEqual([layer["id"] for layer in remaining], [second_layer["id"]])
 
     def test_image_upload_is_deleted_with_plugin(self):
         layer = self.client.post(

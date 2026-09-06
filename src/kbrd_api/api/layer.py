@@ -134,6 +134,60 @@ class Layer:
             (layer_id,),
         ).fetchone()
 
+    @staticmethod
+    def _clone_layer_row(conn, source_layer_id, dest_layout_id, name=None, description=None) -> int:
+        """Inserts a new `layer` row under `dest_layout_id`, copying the
+        source's own `factory_layout` (the Layout-mode grid disposition)
+        verbatim. `name`/`description` override the source's own when
+        given (a real "Duplicate <layer>" with a new name); left `None`
+        they fall back to the source's — used when cascading a Layout
+        duplicate/replace, where each layer keeps its own name."""
+        cursor = conn.execute(
+            """
+            INSERT INTO layer(layout_id, name, description, factory_layout)
+            SELECT ?, COALESCE(?, name), COALESCE(?, description), factory_layout
+            FROM layer WHERE id=?
+            """,
+            (dest_layout_id, name, description, source_layer_id),
+        )
+        return cursor.lastrowid
+
+    @staticmethod
+    def _clone_layer_content(conn, source_layer_id, dest_layer_id) -> None:
+        """Copies every `key_plugin`/`key_property` row from one layer to
+        another, keyed the same (same `key_ref`s) — used by both a layer
+        duplicate/replace and each layer cascaded from a Layout
+        duplicate/replace."""
+        conn.execute(
+            """
+            INSERT INTO key_plugin(
+                layer_id, key_ref, plugin_id, plugin_version, position, enabled, config
+            )
+            SELECT ?, key_ref, plugin_id, plugin_version, position, enabled, config
+            FROM key_plugin WHERE layer_id=?
+            """,
+            (dest_layer_id, source_layer_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO key_property(layer_id, key_ref, config)
+            SELECT ?, key_ref, config FROM key_property WHERE layer_id=?
+            """,
+            (dest_layer_id, source_layer_id),
+        )
+
+    def _clear_layer_content(self, conn, layer_id) -> None:
+        """Like `clear_key`, but for every key on the layer at once — used
+        before a layer/layout replace overwrites a target's content."""
+        plugin_rows = conn.execute(
+            "SELECT * FROM key_plugin WHERE layer_id=?",
+            (layer_id,),
+        ).fetchall()
+        conn.execute("DELETE FROM key_plugin WHERE layer_id=?", (layer_id,))
+        conn.execute("DELETE FROM key_property WHERE layer_id=?", (layer_id,))
+        for plugin_row in plugin_rows:
+            self._delete_plugin_media(conn, plugin_row)
+
     def register(self, app: Flask) -> None:
         @app.get("/api/layer")
         def list_all_layers():
@@ -320,6 +374,18 @@ class Layer:
         @app.delete("/api/layer/<int:layer_id>")
         def delete_layer(layer_id):
             with self.db.connect() as conn:
+                layer = self._layer(conn, layer_id)
+                if layer is None:
+                    return jsonify(error="not found"), 404
+                # A layout must always keep at least one layer — there'd
+                # be nothing left to configure in Mapping mode otherwise
+                # (see `Layout._write`'s own "Default" layer on create).
+                remaining = conn.execute(
+                    "SELECT COUNT(*) FROM layer WHERE layout_id=?",
+                    (layer["layout_id"],),
+                ).fetchone()[0]
+                if remaining <= 1:
+                    return jsonify(error="cannot delete the last layer"), 400
                 plugin_rows = conn.execute(
                     "SELECT * FROM key_plugin WHERE layer_id=?",
                     (layer_id,),
@@ -333,6 +399,157 @@ class Layer:
                 for plugin_row in plugin_rows:
                     self._delete_plugin_media(conn, plugin_row)
                 return jsonify(ok=True)
+
+        @app.post("/api/layer/<int:layer_id>/duplicate")
+        def duplicate_layer(layer_id):
+            data = request.get_json(silent=True) or {}
+            name = str(data.get("name") or "").strip()
+            if not name:
+                return jsonify(error="missing name"), 400
+
+            with self.db.connect() as conn:
+                source = self._layer(conn, layer_id)
+                if source is None:
+                    return jsonify(error="not found"), 404
+                new_id = self._clone_layer_row(
+                    conn,
+                    layer_id,
+                    source["layout_id"],
+                    name,
+                    str(data.get("description") or "").strip(),
+                )
+                self._clone_layer_content(conn, layer_id, new_id)
+                row = self._layer(conn, new_id)
+                return jsonify(self._item(conn, row, True)), 201
+
+        @app.post("/api/layer/<int:layer_id>/replace")
+        def replace_layer(layer_id):
+            data = request.get_json(silent=True) or {}
+            try:
+                source_id = int(data.get("source_id"))
+            except (TypeError, ValueError):
+                return jsonify(error="missing source_id"), 400
+            if source_id == layer_id:
+                return jsonify(error="source and target are identical"), 400
+
+            with self.db.connect() as conn:
+                target = self._layer(conn, layer_id)
+                source = self._layer(conn, source_id)
+                if target is None or source is None:
+                    return jsonify(error="not found"), 404
+                self._clear_layer_content(conn, layer_id)
+                conn.execute(
+                    """
+                    UPDATE layer SET factory_layout=(
+                        SELECT factory_layout FROM layer WHERE id=?
+                    ) WHERE id=?
+                    """,
+                    (source_id, layer_id),
+                )
+                self._clone_layer_content(conn, source_id, layer_id)
+                row = self._layer(conn, layer_id)
+                return jsonify(self._item(conn, row, True))
+
+        @app.post("/api/layout/<int:layout_id>/duplicate")
+        def duplicate_layout(layout_id):
+            data = request.get_json(silent=True) or {}
+            name = str(data.get("name") or "").strip()
+            if not name:
+                return jsonify(error="missing name"), 400
+
+            with self.db.connect() as conn:
+                source = self.layout_api.find(conn, layout_id)
+                if source is None:
+                    return jsonify(error="not found"), 404
+                cursor = conn.execute(
+                    """
+                    INSERT INTO layout(
+                        name, description, author, unit, geometry, svg,
+                        unit_mm, gap_mm, max_columns, max_rows
+                    )
+                    SELECT ?, ?, author, unit, geometry, svg,
+                           unit_mm, gap_mm, max_columns, max_rows
+                    FROM layout WHERE id=?
+                    """,
+                    (name, str(data.get("description") or "").strip(), layout_id),
+                )
+                new_layout_id = cursor.lastrowid
+                source_layers = conn.execute(
+                    "SELECT id FROM layer WHERE layout_id=? ORDER BY name, id",
+                    (layout_id,),
+                ).fetchall()
+                for layer_row in source_layers:
+                    new_layer_id = self._clone_layer_row(
+                        conn, layer_row["id"], new_layout_id
+                    )
+                    self._clone_layer_content(conn, layer_row["id"], new_layer_id)
+                new_row = self.layout_api.find(conn, new_layout_id)
+                return jsonify(self.layout_api.row_to_dict(new_row)), 201
+
+        @app.post("/api/layout/<int:layout_id>/replace")
+        def replace_layout(layout_id):
+            data = request.get_json(silent=True) or {}
+            try:
+                source_id = int(data.get("source_id"))
+            except (TypeError, ValueError):
+                return jsonify(error="missing source_id"), 400
+            if source_id == layout_id:
+                return jsonify(error="source and target are identical"), 400
+
+            with self.db.connect() as conn:
+                target = self.layout_api.find(conn, layout_id)
+                source = self.layout_api.find(conn, source_id)
+                if target is None or source is None:
+                    return jsonify(error="not found"), 404
+                conn.execute(
+                    """
+                    UPDATE layout SET
+                        author=?, unit=?, geometry=?, svg=?,
+                        unit_mm=?, gap_mm=?, max_columns=?, max_rows=?
+                    WHERE id=?
+                    """,
+                    (
+                        source["author"],
+                        source["unit"],
+                        source["geometry"],
+                        source["svg"],
+                        source["unit_mm"],
+                        source["gap_mm"],
+                        source["max_columns"],
+                        source["max_rows"],
+                        layout_id,
+                    ),
+                )
+                old_layer_ids = [
+                    row["id"]
+                    for row in conn.execute(
+                        "SELECT id FROM layer WHERE layout_id=?",
+                        (layout_id,),
+                    ).fetchall()
+                ]
+                if old_layer_ids:
+                    placeholders = ",".join("?" for _ in old_layer_ids)
+                    plugin_rows = conn.execute(
+                        f"SELECT * FROM key_plugin WHERE layer_id IN ({placeholders})",
+                        old_layer_ids,
+                    ).fetchall()
+                    conn.execute(
+                        "DELETE FROM layer WHERE layout_id=?",
+                        (layout_id,),
+                    )
+                    for plugin_row in plugin_rows:
+                        self._delete_plugin_media(conn, plugin_row)
+                source_layers = conn.execute(
+                    "SELECT id FROM layer WHERE layout_id=? ORDER BY name, id",
+                    (source_id,),
+                ).fetchall()
+                for layer_row in source_layers:
+                    new_layer_id = self._clone_layer_row(
+                        conn, layer_row["id"], layout_id
+                    )
+                    self._clone_layer_content(conn, layer_row["id"], new_layer_id)
+                new_row = self.layout_api.find(conn, layout_id)
+                return jsonify(self.layout_api.row_to_dict(new_row))
 
         @app.post("/api/layer/<int:layer_id>/keys/<key_ref>/plugins")
         def add_plugin(layer_id, key_ref):
@@ -424,6 +641,28 @@ class Layer:
                                 plugin["config"],
                             ),
                         )
+                # Carries the source key's own properties along with its
+                # plugins — a "Copy" of a key's Mapping content should
+                # bring everything that makes up its look/behavior, not
+                # just the plugin list (see kbrd-web's own `key_property`
+                # usage, e.g. a key's own font/label config).
+                source_property = conn.execute(
+                    """
+                    SELECT config FROM key_property
+                    WHERE layer_id=? AND key_ref=?
+                    """,
+                    (layer_id, source_key_ref),
+                ).fetchone()
+                if source_property is not None:
+                    conn.execute(
+                        """
+                        INSERT INTO key_property(layer_id, key_ref, config)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(layer_id, key_ref)
+                        DO UPDATE SET config=excluded.config
+                        """,
+                        (layer_id, key_ref, source_property["config"]),
+                    )
                 plugins = conn.execute(
                     """
                     SELECT * FROM key_plugin
