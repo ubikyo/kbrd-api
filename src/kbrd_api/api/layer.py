@@ -464,10 +464,10 @@ class Layer:
                 cursor = conn.execute(
                     """
                     INSERT INTO layout(
-                        name, description, author, unit, geometry, svg,
+                        name, description, author, unit, geometry,
                         unit_mm, gap_mm, max_columns, max_rows
                     )
-                    SELECT ?, ?, author, unit, geometry, svg,
+                    SELECT ?, ?, author, unit, '[]',
                            unit_mm, gap_mm, max_columns, max_rows
                     FROM layout WHERE id=?
                     """,
@@ -504,15 +504,13 @@ class Layer:
                 conn.execute(
                     """
                     UPDATE layout SET
-                        author=?, unit=?, geometry=?, svg=?,
+                        author=?, unit=?,
                         unit_mm=?, gap_mm=?, max_columns=?, max_rows=?
                     WHERE id=?
                     """,
                     (
                         source["author"],
                         source["unit"],
-                        source["geometry"],
-                        source["svg"],
                         source["unit_mm"],
                         source["gap_mm"],
                         source["max_columns"],

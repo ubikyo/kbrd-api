@@ -1,15 +1,18 @@
-import json
-from dataclasses import asdict
-
 from flask import Flask, jsonify, request
 
 from kbrd_api.db import DB
-from .geometry_layout import layout_geometry
-from .geometry_svg import render_geometry_svg
 
-
+# `geometry`/`svg` (an older, pre-Factory-grid representation of a
+# keyboard's physical key shapes, computed by the now-removed
+# `geometry_layout`/`geometry_svg` modules) still exist as columns on the
+# `layout` table — dropping a column outright isn't something this
+# codebase's migrations do (see `db.py`'s own rename-in-place pattern) —
+# but neither is read, written, or returned anywhere above the database
+# any more. KBRD-WEB now builds a layout's actual disposition from the
+# active layer's own `factory_layout` instead (rows/cells/merges/
+# divisions — see `kbrd-web/src/utils/layout.ts`).
 LAYOUT_COLUMNS = """
-    id, name, description, author, unit, geometry, svg, active, created_at,
+    id, name, description, author, unit, active, created_at,
     unit_mm, gap_mm, max_columns, max_rows
 """
 
@@ -34,19 +37,14 @@ class Layout:
 
     @staticmethod
     def row_to_dict(row) -> dict:
-        geometry = json.loads(row["geometry"])
-        layout = layout_geometry(geometry)
         result = {
             "id": row["id"],
             "name": row["name"],
             "description": row["description"],
             "author": row["author"],
             "unit": row["unit"],
-            "geometry": geometry,
-            "svg": render_geometry_svg(layout, row["unit"]),
             "active": bool(row["active"]),
             "created_at": row["created_at"],
-            "layout": asdict(layout),
             # Settings › Geometry's Caps size / Gap size (see kbrd-web's
             # `LayoutSettings`) — opaque numbers to KBRD-API, just stored
             # and returned as-is so they survive a reload / a switch back
@@ -101,9 +99,6 @@ class Layout:
         if unit not in ("px", "mm"):
             raise ValueError("unit must be 'px' or 'mm'")
 
-        geometry = data.get("geometry")
-        layout = layout_geometry(geometry)
-
         return {
             "name": name,
             "description": str(data.get("description") or "").strip(),
@@ -117,12 +112,6 @@ class Layout:
             ),
             "max_columns": Layout._optional_positive_number(data, "max_columns"),
             "max_rows": Layout._optional_positive_number(data, "max_rows"),
-            "geometry": json.dumps(
-                geometry,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-            "svg": render_geometry_svg(layout, unit),
         }
 
     @staticmethod
@@ -152,8 +141,6 @@ class Layout:
             payload["description"],
             payload["author"],
             payload["unit"],
-            payload["geometry"],
-            payload["svg"],
             payload["unit_mm"],
             payload["gap_mm"],
             payload["max_columns"],
@@ -164,10 +151,10 @@ class Layout:
                 cursor = conn.execute(
                     """
                     INSERT INTO layout (
-                        name, description, author, unit, geometry, svg,
+                        name, description, author, unit, geometry,
                         unit_mm, gap_mm, max_columns, max_rows
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, '[]', ?, ?, ?, ?)
                     """,
                     fields,
                 )
@@ -186,7 +173,7 @@ class Layout:
                 cursor = conn.execute(
                     """
                     UPDATE layout
-                    SET name=?, description=?, author=?, unit=?, geometry=?, svg=?,
+                    SET name=?, description=?, author=?, unit=?,
                         unit_mm=?, gap_mm=?, max_columns=?, max_rows=?
                     WHERE id=?
                     """,

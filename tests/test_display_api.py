@@ -51,12 +51,10 @@ class DisplayApiTest(unittest.TestCase):
         first = self.client.post("/api/layout", json={
             "name": "First",
             "unit": "mm",
-            "geometry": [],
         }).json
         second = self.client.post("/api/layout", json={
             "name": "Second",
             "unit": "mm",
-            "geometry": [],
         }).json
         self.assertNotIn("physical_width_mm", first)
         self.assertNotIn("physical_width_mm", second)

@@ -37,7 +37,6 @@ class LayerApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [{"elements": [[{"name": "A", "size": 16}]]}],
         })
         self.layout = response.json
 
@@ -211,7 +210,6 @@ class LayerApiTest(unittest.TestCase):
         other = self.client.post("/api/layout", json={
             "name": "Other",
             "unit": "px",
-            "geometry": [],
         }).json
         self.client.put(f"/api/layout/{other['id']}/activate")
         active = self.client.get("/api/layer/active").json
@@ -488,7 +486,7 @@ class LayerApiTest(unittest.TestCase):
         source_after = next(item for item in layers if item["id"] == source["id"])
         self.assertEqual([plugin["key_ref"] for plugin in source_after["plugins"]], ["A"])
 
-    def test_duplicate_layout_clones_geometry_and_every_layer(self):
+    def test_duplicate_layout_clones_settings_and_every_layer(self):
         layer_a = self.client.post(
             f"/api/layout/{self.layout['id']}/layer",
             json={"name": "Layer A"},
@@ -511,7 +509,7 @@ class LayerApiTest(unittest.TestCase):
         clone = response.json
         self.assertNotEqual(clone["id"], self.layout["id"])
         self.assertEqual(clone["name"], "Layout copy")
-        self.assertEqual(clone["geometry"], self.layout["geometry"])
+        self.assertEqual(clone["unit_mm"], self.layout["unit_mm"])
         self.assertFalse(clone["active"])
 
         clone_layers = self.client.get(f"/api/layout/{clone['id']}/layer").json
@@ -526,11 +524,14 @@ class LayerApiTest(unittest.TestCase):
             [plugin["key_ref"] for plugin in cloned_layer_a["plugins"]], ["A"]
         )
 
-    def test_replace_layout_overwrites_geometry_and_layers(self):
+    def test_replace_layout_overwrites_settings_and_layers(self):
         source_layout = self.client.post("/api/layout", json={
             "name": "Source layout",
             "unit": "mm",
-            "geometry": [{"elements": [[{"name": "X", "size": 12}]]}],
+            # Distinct from `self.layout`'s own default (19.05, from
+            # `setUp`) so the assertion below actually proves the target's
+            # settings got overwritten, not just left already-equal.
+            "unit_mm": 24,
         }).json
         source_layer = self.client.post(
             f"/api/layout/{source_layout['id']}/layer",
@@ -553,7 +554,7 @@ class LayerApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         replaced = response.json
         self.assertEqual(replaced["id"], self.layout["id"])
-        self.assertEqual(replaced["geometry"], source_layout["geometry"])
+        self.assertEqual(replaced["unit_mm"], 24)
 
         layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
         # "Default" comes along too — `source_layout` started with one of

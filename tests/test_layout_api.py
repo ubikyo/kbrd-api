@@ -26,25 +26,17 @@ class LayoutApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [{
-                "elements": [
-                    [{"size": 16, "rowspan": 2}],
-                    [{"size": 16}],
-                ],
-            }],
         })
         self.assertEqual(response.status_code, 201)
 
         active = self.client.get("/api/layout/active")
         self.assertEqual(active.status_code, 200)
         self.assertEqual(active.json["unit"], "mm")
-        self.assertEqual(active.json["layout"]["keys"][1]["x"], 19)
 
     def test_defaults_and_persists_caps_and_gap_size(self):
         created = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
         }).json
         # Not sent at all — falls back to KBRD-DEV's reference panel.
         self.assertEqual(created["unit_mm"], 19.05)
@@ -54,7 +46,6 @@ class LayoutApiTest(unittest.TestCase):
         updated = self.client.put(f"/api/layout/{created['id']}", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
             "unit_mm": 16,
             "gap_mm": 2.5,
         })
@@ -70,7 +61,6 @@ class LayoutApiTest(unittest.TestCase):
         created = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
         }).json
         # Not sent at all — null means "as many as fit" to kbrd-web.
         self.assertIsNone(created["max_columns"])
@@ -79,7 +69,6 @@ class LayoutApiTest(unittest.TestCase):
         updated = self.client.put(f"/api/layout/{created['id']}", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
             "max_columns": 6,
             "max_rows": 4,
         })
@@ -95,7 +84,6 @@ class LayoutApiTest(unittest.TestCase):
         cleared = self.client.put(f"/api/layout/{created['id']}", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
             "max_columns": None,
             "max_rows": None,
         })
@@ -108,7 +96,6 @@ class LayoutApiTest(unittest.TestCase):
         created = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "mm",
-            "geometry": [],
             "max_columns": 6.25,
             "max_rows": 4.5,
         }).json
@@ -123,7 +110,6 @@ class LayoutApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Invalid",
             "unit": "mm",
-            "geometry": [],
             "max_columns": 0,
         })
         self.assertEqual(response.status_code, 400)
@@ -132,7 +118,6 @@ class LayoutApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Invalid",
             "unit": "mm",
-            "geometry": [],
             "max_rows": "not a number",
         })
         self.assertEqual(response.status_code, 400)
@@ -142,7 +127,6 @@ class LayoutApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Invalid",
             "unit": "mm",
-            "geometry": [],
             "gap_mm": -1,
         })
         self.assertEqual(response.status_code, 400)
@@ -151,31 +135,19 @@ class LayoutApiTest(unittest.TestCase):
         response = self.client.post("/api/layout", json={
             "name": "Invalid",
             "unit": "mm",
-            "geometry": [],
             "unit_mm": "not a number",
         })
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json["error"], "unit_mm must be a number")
 
-    def test_rejects_invalid_payload(self):
-        response = self.client.post("/api/layout", json={
-            "name": "Invalid",
-            "unit": "mm",
-            "geometry": "not an array",
-        })
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json["error"], "geometry must be an array")
-
     def test_activates_a_layout(self):
         first = self.client.post("/api/layout", json={
             "name": "Default",
             "unit": "px",
-            "geometry": [],
         }).json
         second = self.client.post("/api/layout", json={
             "name": "Alternative",
             "unit": "px",
-            "geometry": [],
         }).json
 
         activated = self.client.put(f"/api/layout/{second['id']}/activate")

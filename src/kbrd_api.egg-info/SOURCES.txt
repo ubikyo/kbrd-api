@@ -13,15 +13,11 @@ src/kbrd_api/api/__init__.py
 src/kbrd_api/api/agent.py
 src/kbrd_api/api/device.py
 src/kbrd_api/api/display.py
-src/kbrd_api/api/geometry_layout.py
-src/kbrd_api/api/geometry_svg.py
 src/kbrd_api/api/health.py
 src/kbrd_api/api/layer.py
 src/kbrd_api/api/layout.py
 tests/test_agent_api.py
 tests/test_device_api.py
 tests/test_display_api.py
-tests/test_geometry_layout.py
-tests/test_geometry_svg.py
 tests/test_layer_api.py
 tests/test_layout_api.py
