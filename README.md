@@ -3,6 +3,33 @@
 > [!NOTE]
 > TODO
 
+## Documentation de l'API
+
+Le contrat complet est décrit dans `src/kbrd_api/openapi.yaml`, servi par
+`api/docs.py` :
+
+|Route|Description|
+|-|-|
+|`GET /api/docs`|Swagger UI|
+|`GET /api/openapi.yaml`|La spécification elle-même|
+
+En développement : <http://127.0.0.1:8081/api/docs>. La page charge Swagger UI
+depuis un CDN — c'est le *navigateur* qui a besoin d'un accès internet, pas le
+clavier ; la spécification, elle, est servie localement et reste lisible sans.
+
+La spécification est écrite à la main : les routes sont de simples closures
+Flask, sans schémas à introspecter (voir l'en-tête du fichier). C'est
+`tests/test_openapi.py` qui empêche la dérive — il parcourt l'`url_map` de
+l'application et échoue sur toute route non documentée, tout chemin documenté
+que plus aucune route ne sert, et toute méthode qui diffère entre les deux.
+**Ajouter une route, c'est mettre à jour `openapi.yaml`.**
+
+Ce test a besoin de PyYAML, qui n'est *pas* une dépendance d'exécution
+(Swagger UI parse le YAML côté navigateur) :
+
+    .venv/bin/pip install -e '.[test]'
+    .venv/bin/python -m pytest tests
+
 ## KBRD Agent
 
 L'agent desktop s'enregistre toutes les dix secondes sur

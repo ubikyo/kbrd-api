@@ -1,0 +1,1606 @@
+# KBRD-API's own contract, by hand.
+#
+# Hand-written rather than generated: the routes here are plain Flask
+# closures registered by each `api/*.py` class (see `main.py`), with no
+# schema objects behind them to introspect — generating this would have
+# meant rewriting every route as a Blueprint with a marshalling layer, a
+# far larger change than the documentation is worth.
+#
+# The cost of writing it by hand is drift, which is what
+# `tests/test_openapi.py` exists to stop: it walks the live app's own
+# URL map and fails on any route missing here, any path documented that
+# no route serves, and any method mismatch between the two. Add a route,
+# and that test tells you to come back here.
+#
+# Served by `api/docs.py` at `/api/openapi.yaml`, with Swagger UI over it
+# at `/api/docs`.
+openapi: 3.0.3
+
+info:
+  title: KBRD-API
+  version: "1.0.0"
+  description: |
+    The keyboard's own HTTP API: the layouts and layers it stores, the
+    plugins mapped onto each key, the media and fonts they draw with, the
+    physical screen it renders to, and the two things that register
+    themselves with it — the KBRD-DEV unit and the KBRD Agent running on
+    the paired machine.
+
+    Everything is served under `/api`. On a device, nginx proxies that
+    prefix to this service and serves KBRD-WEB from `/`; in development
+    Vite proxies it to `127.0.0.1:8081` (see `kbrd-web/vite.config.ts`).
+
+    There is no authentication: KBRD-API listens on the device's own
+    network and every caller on it is trusted. The one credential in play
+    goes the other way — the KBRD Agent hands over a bearer token when it
+    registers, which this service then uses to call *it* back.
+
+servers:
+  - url: /
+    description: The device itself, or the Vite dev proxy.
+
+tags:
+  - name: Health
+    description: Liveness.
+  - name: Docs
+    description: |
+      This document, and the Swagger UI page over it. Listed here rather
+      than left out because `tests/test_openapi.py` holds the spec to the
+      app's whole URL map — a route that exists is a route that's
+      documented, this one included.
+  - name: Layout
+    description: |
+      A layout is a keyboard: its name and author, the physical size of a
+      keycap and the gap between two, and how many fit each way. Exactly
+      one layout is active at a time.
+  - name: Layer
+    description: |
+      A layer is one layout's grid disposition plus everything mapped onto
+      it. A layout always has at least one — deleting the last is refused.
+  - name: Keys
+    description: |
+      What sits on a key: an ordered list of plugin instances, each with
+      its own config, plus the key's own properties. A key is addressed by
+      its `key_ref`, a string KBRD-WEB assigns and this service only ever
+      stores.
+  - name: Media
+    description: |
+      Images and videos uploaded for `kbrd.render-image` /
+      `kbrd.render-video`. Files are reference-counted: one stops being
+      kept the moment no plugin config mentions it any more.
+  - name: Fonts
+    description: The fonts available to draw text with.
+  - name: Display
+    description: The physical screen's own size, shared by every layout.
+  - name: Device
+    description: |
+      The KBRD-DEV unit, which pushes its screen resolution on startup and
+      re-registers on an interval. A registration older than 30 seconds is
+      stale, which is how a silent device is told apart from one that
+      never connected.
+  - name: Agent
+    description: |
+      The KBRD Agent on the paired machine. Same push model as Device, and
+      the same 30-second staleness window. The applications and browsers
+      routes are proxied straight through to it — `503` when no agent is
+      registered, `502` when one is but can't be reached.
+
+paths:
+
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/docs:
+    get:
+      tags: [Docs]
+      summary: Swagger UI
+      description: |
+        An HTML page rendering the spec below. Its assets come from a CDN,
+        so the *browser* needs internet access — the spec itself is served
+        from the device and readable without any.
+      operationId: getDocs
+      responses:
+        "200":
+          description: The page.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /api/openapi.yaml:
+    get:
+      tags: [Docs]
+      summary: This document
+      operationId: getOpenapiSpec
+      responses:
+        "200":
+          description: The spec.
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /api/layout:
+    get:
+      tags: [Layout]
+      summary: List every layout
+      operationId: listLayouts
+      responses:
+        "200":
+          description: Every layout, by name then id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Layout"
+    post:
+      tags: [Layout]
+      summary: Create a layout
+      description: |
+        A fresh layout is created with one layer named "Default" — a
+        layout with no layer at all has nothing to configure in Mapping
+        mode.
+      operationId: createLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayoutWrite"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/layout/active:
+    get:
+      tags: [Layout]
+      summary: The layout in use
+      description: |
+        The active layout if one is flagged, otherwise the one named
+        "default", otherwise the first alphabetically — so this answers
+        even when nothing has been activated yet.
+      operationId: getActiveLayout
+      responses:
+        "200":
+          description: The layout in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "404":
+          description: There are no layouts at all.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layout/{layout_id}:
+    parameters:
+      - $ref: "#/components/parameters/LayoutId"
+    get:
+      tags: [Layout]
+      summary: One layout
+      operationId: getLayout
+      responses:
+        "200":
+          description: The layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Layout]
+      summary: Update a layout
+      description: |
+        A full replacement of the layout's own settings — a field left out
+        is *not* left alone, it falls back to the documented default
+        (`unit_mm` 19.05, `gap_mm` 3, `max_columns`/`max_rows` null).
+      operationId: updateLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayoutWrite"
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Layout]
+      summary: Delete a layout
+      description: Its layers, their plugins and their properties go with it.
+      operationId: deleteLayout
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layout/{layout_id}/activate:
+    parameters:
+      - $ref: "#/components/parameters/LayoutId"
+    put:
+      tags: [Layout]
+      summary: Make this the active layout
+      description: |
+        Clears the active flag on every other layout, and on every layer —
+        activating a layout deliberately leaves no layer active, so the
+        next `GET /api/layer/active` falls back to the layout alone.
+      operationId: activateLayout
+      responses:
+        "200":
+          description: The now-active layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layout/{layout_id}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/LayoutId"
+    post:
+      tags: [Layout]
+      summary: Copy a layout
+      description: |
+        Copies the layout's settings and every one of its layers — each
+        keeping its own name, with all its plugins and key properties.
+      operationId: duplicateLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamedCopy"
+      responses:
+        "201":
+          description: The new layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layout/{layout_id}/replace:
+    parameters:
+      - $ref: "#/components/parameters/LayoutId"
+    post:
+      tags: [Layout]
+      summary: Overwrite a layout from another
+      description: |
+        The target keeps its own name and description; everything else —
+        settings, layers, plugins, key properties — is replaced by the
+        source's. The target's old layers are deleted outright, and any
+        media only they referenced goes with them.
+      operationId: replaceLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceSource"
+      responses:
+        "200":
+          description: The overwritten layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Layout"
+        "400":
+          description: |
+            No `source_id`, or a source identical to the target.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layout/{layout_id}/layer:
+    parameters:
+      - $ref: "#/components/parameters/LayoutId"
+    get:
+      tags: [Layer]
+      summary: Every layer of one layout
+      description: Each layer with its plugins and key properties included.
+      operationId: listLayoutLayers
+      responses:
+        "200":
+          description: The layout's layers, by name then id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LayerDetail"
+    post:
+      tags: [Layer]
+      summary: Add a layer to a layout
+      operationId: createLayer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayerWrite"
+      responses:
+        "201":
+          description: The new layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No such layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer:
+    get:
+      tags: [Layer]
+      summary: Every layer, across every layout
+      description: |
+        Without plugins or key properties — the flat list KBRD-WEB's own
+        layer pickers offer (`invoke-layer`, `invoke-layout`). For a
+        layer's contents, ask for it by layout instead.
+      operationId: listLayers
+      responses:
+        "200":
+          description: Every layer, by name then id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Layer"
+
+  /api/layer/active:
+    get:
+      tags: [Layer]
+      summary: What the keyboard is currently showing
+      description: |
+        The active layer and its layout. With no layer active, `layer` is
+        `null` and `layout` still answers with the default one — which is
+        the state right after a layout is activated.
+      operationId: getActiveLayer
+      responses:
+        "200":
+          description: The active layer, or just the layout.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  layer:
+                    oneOf:
+                      - $ref: "#/components/schemas/LayerDetail"
+                      - type: "null"
+                  layout:
+                    $ref: "#/components/schemas/Layout"
+        "404":
+          description: There are no layouts at all.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Layer]
+      summary: Deactivate every layer
+      description: |
+        Leaves the active *layout* alone — this is "show no layer", not
+        "show nothing".
+      operationId: deactivateLayer
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /api/layer/{layer_id}:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+    put:
+      tags: [Layer]
+      summary: Rename a layer
+      description: |
+        Name and description only — a layer's grid has its own route, and
+        its contents are edited a key at a time.
+      operationId: updateLayer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayerWrite"
+      responses:
+        "200":
+          description: The updated layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Layer]
+      summary: Delete a layer
+      description: |
+        Refused for a layout's last layer: there'd be nothing left to
+        configure in Mapping mode.
+      operationId: deleteLayer
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          description: This is the layout's last layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layer/{layer_id}/activate:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+    put:
+      tags: [Layer]
+      summary: Make this the active layer
+      description: |
+        Activates its layout too, so the pair is always consistent.
+      operationId: activateLayer
+      responses:
+        "200":
+          description: The now-active layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layer/{layer_id}/factory-layout:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+    put:
+      tags: [Layer]
+      summary: Store the layer's grid disposition
+      description: |
+        KBRD-WEB's own Factory grid — rows, cells, merges, divisions.
+        Opaque to this service, stored and handed back as-is. `null`
+        clears it.
+      operationId: updateFactoryLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                factory_layout:
+                  oneOf:
+                    - type: object
+                      additionalProperties: true
+                    - type: "null"
+      responses:
+        "200":
+          description: The updated layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          description: "`factory_layout` was neither an object nor null."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer/{layer_id}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+    post:
+      tags: [Layer]
+      summary: Copy a layer
+      description: |
+        Into the same layout, with the source's grid, plugins and key
+        properties, under a new name.
+      operationId: duplicateLayer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamedCopy"
+      responses:
+        "201":
+          description: The new layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layer/{layer_id}/replace:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+    post:
+      tags: [Layer]
+      summary: Overwrite a layer from another
+      description: |
+        The target keeps its name and its place in its own layout;
+        everything else — grid, plugins, key properties — comes from the
+        source. Media only the target referenced is dropped.
+      operationId: replaceLayer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceSource"
+      responses:
+        "200":
+          description: The overwritten layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          description: No `source_id`, or a source identical to the target.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/layer/{layer_id}/keys/{key_ref}:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+      - $ref: "#/components/parameters/KeyRef"
+    delete:
+      tags: [Keys]
+      summary: Clear a key
+      description: |
+        Drops every plugin on it and its own properties. Media those
+        plugins referenced is deleted unless another plugin still points
+        at it.
+      operationId: clearKey
+      responses:
+        "200":
+          description: The layer, as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer/{layer_id}/keys/{key_ref}/plugins:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+      - $ref: "#/components/parameters/KeyRef"
+    post:
+      tags: [Keys]
+      summary: Attach a plugin to a key
+      description: |
+        Appended last, which is also the order they draw in — the last
+        plugin is on top.
+      operationId: addKeyPlugin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plugin_id]
+              properties:
+                plugin_id:
+                  type: string
+                  description: The manifest id, e.g. `kbrd.render-label`.
+                  example: kbrd.render-label
+                plugin_version:
+                  type: string
+                  default: "1.0.0"
+                config:
+                  $ref: "#/components/schemas/PluginConfig"
+      responses:
+        "201":
+          description: The new plugin instance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyPlugin"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer/{layer_id}/keys/{key_ref}/plugins/duplicate-from:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+      - $ref: "#/components/parameters/KeyRef"
+    post:
+      tags: [Keys]
+      summary: Copy another key's plugins onto this one
+      description: |
+        The source key's plugins are inserted *before* whatever this key
+        already carries, and its key properties are copied over too.
+      operationId: duplicateKeyPlugins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_key_ref]
+              properties:
+                source_key_ref:
+                  type: string
+      responses:
+        "201":
+          description: Every plugin on the layer afterwards.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KeyPlugin"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer/{layer_id}/keys/{key_ref}/move-to:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+      - $ref: "#/components/parameters/KeyRef"
+    post:
+      tags: [Keys]
+      summary: Move a key's contents onto another key
+      description: |
+        Plugins are prepended to the destination's own; the destination's
+        key properties are replaced by the source's, if it had any.
+      operationId: moveKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination_key_ref]
+              properties:
+                destination_key_ref:
+                  type: string
+      responses:
+        "200":
+          description: The layer, as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LayerDetail"
+        "400":
+          description: |
+            No `destination_key_ref`, or one identical to the source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/layer/{layer_id}/keys/{key_ref}/properties:
+    parameters:
+      - $ref: "#/components/parameters/LayerId"
+      - $ref: "#/components/parameters/KeyRef"
+    put:
+      tags: [Keys]
+      summary: Set a key's own properties
+      description: |
+        The key's config as opposed to any plugin's — created on first
+        write, replaced wholesale on every one after.
+      operationId: updateKeyProperties
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config:
+                  $ref: "#/components/schemas/PluginConfig"
+      responses:
+        "200":
+          description: What was stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyProperty"
+        "400":
+          description: The config could not be serialised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such layer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/key-plugin/{plugin_id}:
+    parameters:
+      - name: plugin_id
+        in: path
+        required: true
+        description: A plugin *instance*'s id — not the manifest id.
+        schema:
+          type: integer
+    put:
+      tags: [Keys]
+      summary: Update a plugin instance
+      description: |
+        Every field is optional and left alone when absent, `config`
+        included. Media the previous config referenced and the new one
+        doesn't is deleted, unless another plugin still points at it.
+      operationId: updateKeyPlugin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                position:
+                  type: integer
+                  description: Draw order within the key; last is on top.
+                enabled:
+                  type: boolean
+                config:
+                  $ref: "#/components/schemas/PluginConfig"
+      responses:
+        "200":
+          description: The updated instance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyPlugin"
+        "400":
+          description: The config could not be serialised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Keys]
+      summary: Detach a plugin instance
+      operationId: deleteKeyPlugin
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media:
+    post:
+      tags: [Media]
+      summary: Upload an image or a video
+      description: |
+        Both the extension and the declared MIME type have to agree that
+        this is an image (`.gif`, `.jpeg`, `.jpg`, `.png`) or a video
+        (`.mp4`, `.webm`). The file is stored under a generated name,
+        which is what a plugin config then refers to. Bodies are capped at
+        32 MiB.
+      operationId: uploadMedia
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  filename:
+                    type: string
+                    example: 4f1c9e7a2b0d4e5f8a1b2c3d4e5f6a7b.png
+        "400":
+          description: No file, or not an accepted image/video.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The file could not be written.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/media/{filename}:
+    parameters:
+      - name: filename
+        in: path
+        required: true
+        description: The generated name a `POST /api/media` handed back.
+        schema:
+          type: string
+    get:
+      tags: [Media]
+      summary: Fetch an uploaded file
+      operationId: getMedia
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No such file.
+
+  /api/fonts:
+    get:
+      tags: [Fonts]
+      summary: List the available fonts
+      description: |
+        The bundled faces and any uploaded alongside them, `.ttf` and
+        `.otf`, de-duplicated by filename and sorted case-insensitively.
+        Shaped as `{value, label}` because that's what the editors' own
+        selects take.
+      operationId: listFonts
+      responses:
+        "200":
+          description: The fonts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    value:
+                      type: string
+                      description: The filename, which is what a config stores.
+                      example: Inter_18pt-Regular.ttf
+                    label:
+                      type: string
+                      example: Inter_18pt-Regular
+
+  /api/fonts/{filename}:
+    parameters:
+      - name: filename
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Fonts]
+      summary: Fetch a font file
+      description: |
+        Uploaded fonts take precedence over bundled ones of the same name.
+      operationId: getFont
+      responses:
+        "200":
+          description: The font file.
+          content:
+            font/ttf:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: |
+            A name with a path in it, or an extension other than
+            `.ttf`/`.otf`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such font.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/display:
+    get:
+      tags: [Display]
+      summary: The screen's physical size
+      operationId: getDisplay
+      responses:
+        "200":
+          description: The size, in millimetres.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Display"
+    put:
+      tags: [Display]
+      summary: Set the screen's physical size
+      description: |
+        A full replacement: a field left out falls back to its default
+        (216 x 135 mm), it isn't left alone.
+      operationId: updateDisplay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Display"
+      responses:
+        "200":
+          description: The stored size.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Display"
+        "400":
+          description: A dimension was not a number, or not above zero.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/device:
+    get:
+      tags: [Device]
+      summary: Is a KBRD-DEV unit connected?
+      description: |
+        `connected` is `false` both when none ever registered and when the
+        last registration is more than 30 seconds old.
+      operationId: getDevice
+      responses:
+        "200":
+          description: The device's state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceStatus"
+
+  /api/device/register:
+    post:
+      tags: [Device]
+      summary: Register a KBRD-DEV unit
+      description: |
+        Called by KBRD-DEV itself, on startup and then on an interval.
+        The physical size is optional — not every panel reports it in its
+        EDID — but sending one half means sending both, and both must be
+        positive.
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [width, height]
+              properties:
+                width:
+                  type: integer
+                  description: Screen width, in pixels.
+                height:
+                  type: integer
+                  description: Screen height, in pixels.
+                width_mm:
+                  type: integer
+                height_mm:
+                  type: integer
+      responses:
+        "200":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                  - $ref: "#/components/schemas/DeviceSize"
+        "400":
+          description: A missing, non-numeric or non-positive dimension.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/agent:
+    get:
+      tags: [Agent]
+      summary: Is an agent connected?
+      description: |
+        Same 30-second staleness window as the device. The agent's host,
+        port and token are deliberately never returned.
+      operationId: getAgent
+      responses:
+        "200":
+          description: The agent's state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatus"
+
+  /api/agent/register:
+    post:
+      tags: [Agent]
+      summary: Register an agent
+      description: |
+        Called by the KBRD Agent on the paired machine. Its host is taken
+        from the request itself, not from the body. The `token` it hands
+        over is what this service then presents when calling the agent
+        back, so it is stored but never handed out again.
+      operationId: registerAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [port, token, name]
+              properties:
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                token:
+                  type: string
+                  description: Bearer token for calls back to the agent.
+                name:
+                  type: string
+                platform:
+                  type: string
+                version:
+                  type: string
+      responses:
+        "200":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                  - $ref: "#/components/schemas/AgentIdentity"
+        "400":
+          description: |
+            A port outside 1-65535, or a missing token or name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/applications:
+    get:
+      tags: [Agent]
+      summary: Applications the paired machine can launch
+      description: Proxied to the registered agent.
+      operationId: listApplications
+      responses:
+        "200":
+          description: Whatever the agent answered.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    canQuit:
+                      type: boolean
+        "502":
+          $ref: "#/components/responses/AgentUnreachable"
+        "503":
+          $ref: "#/components/responses/AgentUnavailable"
+
+  /api/applications/{application_id}/launch:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      tags: [Agent]
+      summary: Launch an application
+      operationId: launchApplication
+      responses:
+        "200":
+          description: Whatever the agent answered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: An empty application id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          $ref: "#/components/responses/AgentUnreachable"
+        "503":
+          $ref: "#/components/responses/AgentUnavailable"
+
+  /api/applications/{application_id}/quit:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      tags: [Agent]
+      summary: Quit an application
+      operationId: quitApplication
+      responses:
+        "200":
+          description: Whatever the agent answered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: An empty application id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          $ref: "#/components/responses/AgentUnreachable"
+        "503":
+          $ref: "#/components/responses/AgentUnavailable"
+
+  /api/browsers:
+    get:
+      tags: [Agent]
+      summary: Browsers the paired machine can open a URL with
+      description: Proxied to the registered agent.
+      operationId: listBrowsers
+      responses:
+        "200":
+          description: Whatever the agent answered.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+        "502":
+          $ref: "#/components/responses/AgentUnreachable"
+        "503":
+          $ref: "#/components/responses/AgentUnavailable"
+
+  /api/browsers/{browser_id}/open:
+    parameters:
+      - name: browser_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Agent]
+      summary: Open a URL in a browser
+      operationId: openBrowser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  example: https://kbrd.dev
+      responses:
+        "200":
+          description: Whatever the agent answered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: An empty browser id, or a missing URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          $ref: "#/components/responses/AgentUnreachable"
+        "503":
+          $ref: "#/components/responses/AgentUnavailable"
+
+components:
+
+  parameters:
+
+    LayoutId:
+      name: layout_id
+      in: path
+      required: true
+      schema:
+        type: integer
+
+    LayerId:
+      name: layer_id
+      in: path
+      required: true
+      schema:
+        type: integer
+
+    KeyRef:
+      name: key_ref
+      in: path
+      required: true
+      description: |
+        The key's own identifier within its layer — a string KBRD-WEB
+        assigns and this service only ever stores and matches on.
+      schema:
+        type: string
+
+    ApplicationId:
+      name: application_id
+      in: path
+      required: true
+      description: |
+        Declared `path` in Flask, so an id containing slashes (a bundle
+        path, say) travels intact.
+      schema:
+        type: string
+
+  responses:
+
+    Ok:
+      description: Done.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok:
+                type: boolean
+                example: true
+
+    BadRequest:
+      description: The body was missing something, or was the wrong shape.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: No such record.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    AgentUnavailable:
+      description: No agent is registered, or its registration is stale.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    AgentUnreachable:
+      description: An agent is registered but could not be reached.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      example:
+        error: not found
+
+    Layout:
+      type: object
+      description: A keyboard, and the geometry KBRD-WEB draws it at.
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+        unit:
+          type: string
+          enum: [px, mm]
+        active:
+          type: boolean
+        created_at:
+          type: string
+        unit_mm:
+          type: number
+          description: A keycap's own size — Settings › Geometry's Caps size.
+        gap_mm:
+          type: number
+          description: The gap between two keycaps.
+        max_columns:
+          type: number
+          nullable: true
+          description: |
+            How many 1U items fit across; `null` means "as many as fit",
+            which KBRD-WEB computes and clamps to itself.
+        max_rows:
+          type: number
+          nullable: true
+
+    LayoutWrite:
+      type: object
+      required: [name, unit]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+        unit:
+          type: string
+          enum: [px, mm]
+        unit_mm:
+          type: number
+          default: 19.05
+        gap_mm:
+          type: number
+          default: 3
+        max_columns:
+          type: number
+          nullable: true
+          minimum: 1
+        max_rows:
+          type: number
+          nullable: true
+          minimum: 1
+
+    Layer:
+      type: object
+      description: One layout's grid, without what's mapped onto it.
+      properties:
+        id:
+          type: integer
+        layout_id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+        factory_layout:
+          description: |
+            KBRD-WEB's own grid disposition — rows, cells, merges,
+            divisions. Opaque here.
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+
+    LayerDetail:
+      allOf:
+        - $ref: "#/components/schemas/Layer"
+        - type: object
+          description: A layer with everything mapped onto it.
+          properties:
+            plugins:
+              type: array
+              items:
+                $ref: "#/components/schemas/KeyPlugin"
+            key_properties:
+              type: array
+              items:
+                $ref: "#/components/schemas/KeyProperty"
+
+    LayerWrite:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    NamedCopy:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    ReplaceSource:
+      type: object
+      required: [source_id]
+      properties:
+        source_id:
+          type: integer
+          description: What to copy from. May not be the target itself.
+
+    PluginConfig:
+      type: object
+      additionalProperties: true
+      description: |
+        A plugin instance's own settings, whose shape each plugin's
+        manifest defines (see `kbrd-plugins/src/*/plugin.json`). Stored
+        and returned verbatim — this service never looks inside one,
+        except to spot the media filenames it references so uploads can be
+        reference-counted.
+
+    KeyPlugin:
+      type: object
+      description: One plugin attached to one key.
+      properties:
+        id:
+          type: integer
+        layer_id:
+          type: integer
+        key_ref:
+          type: string
+        plugin_id:
+          type: string
+          example: kbrd.render-label
+        plugin_version:
+          type: string
+        position:
+          type: integer
+          description: Draw order within the key; last is on top.
+        enabled:
+          type: boolean
+        config:
+          $ref: "#/components/schemas/PluginConfig"
+
+    KeyProperty:
+      type: object
+      description: A key's own config, as opposed to any plugin's.
+      properties:
+        key_ref:
+          type: string
+        config:
+          $ref: "#/components/schemas/PluginConfig"
+
+    Display:
+      type: object
+      properties:
+        physical_width_mm:
+          type: number
+          default: 216
+        physical_height_mm:
+          type: number
+          default: 135
+
+    DeviceSize:
+      type: object
+      properties:
+        width:
+          type: integer
+        height:
+          type: integer
+        width_mm:
+          type: integer
+          nullable: true
+        height_mm:
+          type: integer
+          nullable: true
+
+    DeviceStatus:
+      allOf:
+        - type: object
+          properties:
+            connected:
+              type: boolean
+        - $ref: "#/components/schemas/DeviceSize"
+
+    AgentIdentity:
+      type: object
+      properties:
+        name:
+          type: string
+        platform:
+          type: string
+        version:
+          type: string
+
+    AgentStatus:
+      allOf:
+        - type: object
+          properties:
+            connected:
+              type: boolean
+        - $ref: "#/components/schemas/AgentIdentity"

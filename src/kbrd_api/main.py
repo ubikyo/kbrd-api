@@ -2,6 +2,7 @@ from flask import Flask
 
 from kbrd_api.config import Config
 from kbrd_api.db import DB
+from kbrd_api.api.docs import Docs
 from kbrd_api.api.health import Health
 from kbrd_api.api.display import Display
 from kbrd_api.api.layout import Layout
@@ -19,6 +20,7 @@ def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
     db.init_schema()
 
     Health().register(app)
+    Docs().register(app)
     Agent().register(app)
     Device().register(app)
     Display(db).register(app)
