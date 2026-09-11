@@ -1,6 +1,14 @@
 .DS_Store
 *.log
+
+# Produits de build : métadonnées setuptools régénérées à chaque
+# `pip install -e .`, et bytecode. Les motifs précédents visaient
+# `kbrd-api.egg-info/` et `kbrd-api/__pycache__/`, des chemins qui
+# n'existent pas — d'où le `src/kbrd_api.egg-info/` qui s'est retrouvé
+# committé.
+*.egg-info/
+__pycache__/
 *.pyc
+
+# Base de développement (voir dev_server.py).
 data/kbrd.db
-kbrd-api/__pycache__/
-kbrd-api.egg-info/
