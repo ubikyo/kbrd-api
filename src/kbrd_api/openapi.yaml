@@ -67,7 +67,13 @@ tags:
     description: |
       Images and videos uploaded for `kbrd.render-image` /
       `kbrd.render-video`. Files are reference-counted: one stops being
-      kept the moment no plugin config mentions it any more.
+      kept the moment no plugin config mentions it any more. Categories
+      are the labels KBRD-WEB's own Media panel files them under, and are
+      rows of their own — they outlive whatever is filed under them.
+      Both are device-wide: neither belongs to a layout or a layer, so
+      every layout sees the same library. There is always at least one
+      category ("Default" on a fresh device); deleting the last is
+      refused.
   - name: Fonts
     description: The fonts available to draw text with.
   - name: Display
@@ -849,15 +855,44 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /api/media:
+    get:
+      tags: [Media]
+      summary: List the media library
+      description: |
+        Every media the Media panel holds — what was uploaded *with* a
+        category (see the `category_id` field below). A file uploaded
+        without one is stored but not filed, and does not appear here.
+      operationId: listMedias
+      responses:
+        "200":
+          description: Every media, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Media"
     post:
       tags: [Media]
       summary: Upload an image or a video
       description: |
-        Both the extension and the declared MIME type have to agree that
-        this is an image (`.gif`, `.jpeg`, `.jpg`, `.png`) or a video
-        (`.mp4`, `.webm`). The file is stored under a generated name,
-        which is what a plugin config then refers to. Bodies are capped at
-        32 MiB.
+        Accepted as an image: `.png`, `.jpeg`, `.jpg` — and the declared
+        MIME type has to agree (`image/…`).
+
+        Accepted as a video: `.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`,
+        `.avi` — the containers the device has a native demuxer for. The
+        declared type is held to `video/…` only when there is one:
+        whether a browser can name `.mkv` or `.avi` depends on the machine
+        it runs on, and one that can't sends nothing.
+
+        The lists are what the device itself can render — Kivy's
+        SDL2_image loader for images, its gstplayer for videos — so
+        nothing is stored that could not then be drawn. A container says
+        nothing about the codec inside it, which is as far as an extension
+        check can see.
+
+        The file is kept under a generated name, which is what a plugin
+        config then refers to. Bodies are capped at 32 MiB.
       operationId: uploadMedia
       requestBody:
         required: true
@@ -870,19 +905,31 @@ paths:
                 file:
                   type: string
                   format: binary
+                category_id:
+                  type: integer
+                  description: |
+                    Files the media in the library under this category,
+                    keeping the name it was uploaded under. Omit it to
+                    store the file alone — which is what the plugin
+                    editors do, and why they still get `{filename}` back.
       responses:
         "201":
-          description: Stored.
+          description: |
+            Stored. With a `category_id`, the library entry that was
+            created; without one, just the generated filename.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  filename:
-                    type: string
-                    example: 4f1c9e7a2b0d4e5f8a1b2c3d4e5f6a7b.png
+                oneOf:
+                  - $ref: "#/components/schemas/Media"
+                  - type: object
+                    properties:
+                      filename:
+                        type: string
+                        example: 4f1c9e7a2b0d4e5f8a1b2c3d4e5f6a7b.png
         "400":
-          description: No file, or not an accepted image/video.
+          description: |
+            No file, not an accepted image/video, or no such category.
           content:
             application/json:
               schema:
@@ -916,6 +963,125 @@ paths:
                 format: binary
         "404":
           description: No such file.
+
+  /api/media-category:
+    get:
+      tags: [Media]
+      summary: List every media category
+      description: Ordered by name, the order KBRD-WEB's own picker lists them in.
+      operationId: listMediaCategories
+      responses:
+        "200":
+          description: Every category.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MediaCategory"
+    post:
+      tags: [Media]
+      summary: Create a media category
+      operationId: createMediaCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCategoryInput"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCategory"
+        "400":
+          description: Missing or empty name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Another category already goes by that name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/media-category/{category_id}:
+    parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      tags: [Media]
+      summary: Rename a media category
+      operationId: updateMediaCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCategoryInput"
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCategory"
+        "400":
+          description: Missing or empty name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Another category already goes by that name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Media]
+      summary: Delete a media category
+      description: |
+        Takes its medias with it, and each of their files unless a plugin
+        config still draws with one.
+      operationId: deleteMediaCategory
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "400":
+          description: |
+            This is the last category — the library always keeps one, so
+            there is always somewhere to file a media.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/fonts:
     get:
@@ -1383,6 +1549,55 @@ components:
           type: string
       example:
         error: not found
+
+    Media:
+      type: object
+      description: One image or video the Media panel's library holds.
+      properties:
+        id:
+          type: integer
+        kind:
+          type: string
+          enum: [photo, video]
+        category_id:
+          type: integer
+        filename:
+          type: string
+          description: |
+            The generated name the file is stored under, and what
+            `GET /api/media/{filename}` serves it back from.
+          example: 4f1c9e7a2b0d4e5f8a1b2c3d4e5f6a7b.png
+        name:
+          type: string
+          description: The name the file was dropped under.
+          example: logo.png
+        created_at:
+          type: string
+
+    MediaCategory:
+      type: object
+      description: A label the Media panel files an image or a video under.
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        created_at:
+          type: string
+      example:
+        id: 1
+        name: Icons
+        created_at: "2026-01-14 09:12:03"
+
+    MediaCategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Trimmed, and unique across every category.
+      example:
+        name: Icons
 
     Layout:
       type: object

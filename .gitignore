@@ -2,3 +2,5 @@
 *.log
 *.pyc
 data/kbrd.db
+kbrd-api/__pycache__/
+kbrd-api.egg-info/

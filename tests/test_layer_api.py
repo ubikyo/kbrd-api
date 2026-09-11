@@ -737,14 +737,110 @@ class LayerApiTest(unittest.TestCase):
         self.client.delete(f"/api/key-plugin/{plugins[1]['id']}")
         self.assertFalse(media_path.exists())
 
+    def _upload(self, filename, mimetype):
+        return self.client.post(
+            "/api/media",
+            data={"file": (io.BytesIO(b"not-really-a-media"), filename, mimetype)},
+            content_type="multipart/form-data",
+        )
+
+    def test_accepts_every_video_container_on_the_list(self):
+        for filename, mimetype in (
+            ("clip.mp4", "video/mp4"),
+            ("clip.m4v", "video/x-m4v"),
+            ("clip.mov", "video/quicktime"),
+            ("clip.mkv", "video/x-matroska"),
+            ("clip.webm", "video/webm"),
+            ("clip.avi", "video/x-msvideo"),
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(self._upload(filename, mimetype).status_code, 201)
+
+    def test_rejects_containers_without_a_native_demuxer(self):
+        # ffmpeg could demux every one of these and `gst1-libav` would
+        # register a fallback element for it, but the device has no native
+        # GStreamer demuxer — see `Layer`'s own note.
+        for filename, mimetype in (
+            ("clip.m2ts", "video/mp2t"),
+            ("clip.mts", ""),
+            ("clip.mpg", "video/mpeg"),
+            ("clip.wmv", "video/x-ms-wmv"),
+            ("clip.flv", "video/x-flv"),
+            ("clip.gif", "image/gif"),
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(self._upload(filename, mimetype).status_code, 400)
+
+    def test_accepts_a_video_whose_type_the_browser_could_not_name(self):
+        # Whether a browser can name `.mkv` or `.avi` depends on the
+        # machine it runs on; one that can't sends nothing (see `Layer`'s
+        # own `AMBIGUOUS_VIDEO_MIMETYPES`).
+        for filename, mimetype in (
+            ("clip.mkv", ""),
+            ("clip.avi", "application/octet-stream"),
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(self._upload(filename, mimetype).status_code, 201)
+
+    def test_that_leniency_does_not_reach_images(self):
+        # An image still has to declare itself one: nothing about PNG or
+        # JPEG is ambiguous to a browser.
+        self.assertEqual(self._upload("art.png", "").status_code, 400)
+
+    def test_rejects_images_outside_png_and_jpeg(self):
+        # The device could draw BMP, and could never draw WebP — neither
+        # is on the list either way.
+        for filename, mimetype in (
+            ("art.bmp", "image/bmp"),
+            ("art.webp", "image/webp"),
+        ):
+            with self.subTest(filename=filename):
+                response = self._upload(filename, mimetype)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json, {"error": "invalid media"})
+
+    def test_an_uploaded_media_can_be_read_back_from_a_relative_dir(self):
+        # Regression: an upload is written with a plain filesystem path,
+        # but `send_from_directory` resolves a relative one against the
+        # application root rather than the working directory — configured
+        # relatively (as `dev.sh` does), every stored file came back 404.
+        # The directory therefore has to sit under the working directory
+        # for this to say anything at all.
+        with tempfile.TemporaryDirectory(dir=".") as media_dir:
+            relative = os.path.relpath(media_dir)
+            self.assertFalse(os.path.isabs(relative))
+
+            app, _ = create_app(
+                Config(
+                    db_path=self.db_path,
+                    media_dir=relative,
+                    font_dir=relative,
+                )
+            )
+            app.testing = True
+            client = app.test_client()
+
+            stored = client.post(
+                "/api/media",
+                data={"file": (io.BytesIO(b"\x89PNG-ish"), "art.png", "image/png")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(stored.status_code, 201)
+
+            read_back = client.get(f"/api/media/{stored.json['filename']}")
+            self.assertEqual(read_back.status_code, 200)
+            self.assertEqual(read_back.data, b"\x89PNG-ish")
+
     def test_rejects_unsupported_video_container(self):
+        # Ogg is the example now that `.mov` is accepted: the device
+        # carries no Ogg demuxer in its GStreamer plugin set.
         response = self.client.post(
             "/api/media",
             data={
                 "file": (
                     io.BytesIO(b"not-a-video"),
-                    "movie.mov",
-                    "video/quicktime",
+                    "movie.ogv",
+                    "video/ogg",
                 )
             },
             content_type="multipart/form-data",

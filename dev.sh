@@ -12,11 +12,4 @@ fi
 . .venv/bin/activate
 pip install -e . flask
 
-python3 -c "
-from kbrd_api.config import Config
-from kbrd_api.main import create_app
-
-cfg = Config(db_path='data/kbrd.db', media_dir='data/media', font_dir='data/fonts')
-app, cfg = create_app(cfg)
-app.run(host=cfg.host, port=cfg.port, debug=True)
-"
+python3 dev_server.py

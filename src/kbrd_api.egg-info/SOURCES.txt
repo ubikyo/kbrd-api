@@ -19,9 +19,11 @@ src/kbrd_api/api/docs.py
 src/kbrd_api/api/health.py
 src/kbrd_api/api/layer.py
 src/kbrd_api/api/layout.py
+src/kbrd_api/api/media_category.py
 tests/test_agent_api.py
 tests/test_device_api.py
 tests/test_display_api.py
 tests/test_layer_api.py
 tests/test_layout_api.py
+tests/test_media_category_api.py
 tests/test_openapi.py

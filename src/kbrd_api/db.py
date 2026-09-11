@@ -169,6 +169,79 @@ class DB:
                     conn.execute(
                         f"ALTER TABLE {table} RENAME COLUMN workspace_id TO layer_id"
                     )
+            conn.executescript("""
+                -- The Media panel's own categories (see kbrd-web's
+                -- `menu/Category`): a free label an imported image or
+                -- video is filed under, so a library of any size stays
+                -- navigable without a folder tree of its own. Names are
+                -- unique — the panel picks a category by name, and two
+                -- with the same one would be indistinguishable there.
+                CREATE TABLE IF NOT EXISTS media_category (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT NOT NULL UNIQUE,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+            """)
+            conn.executescript("""
+                -- The Media panel's own library: one row per image or
+                -- video imported through it, holding the name the file
+                -- arrived under, the generated name it is stored as in
+                -- `/data/media` (unique — it is what a plugin config
+                -- refers to as well), and the category it is filed under.
+                -- Deleting a category takes its medias with it, the way
+                -- a layout takes its layers. `MediaCategory` also drops
+                -- each of their files, unless a plugin config still points
+                -- at one.
+                CREATE TABLE IF NOT EXISTS media (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  kind TEXT NOT NULL CHECK(kind IN ('photo', 'video')),
+                  category_id INTEGER NOT NULL
+                    REFERENCES media_category(id) ON DELETE CASCADE,
+                  filename TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+            """)
+            # This table first shipped with `ON DELETE RESTRICT`, which
+            # refused to delete a category that still held medias. A
+            # foreign key's action can't be altered in place in SQLite, so
+            # the table is rebuilt — the rows carry over untouched.
+            media_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='media'"
+            ).fetchone()
+            if media_sql and "ON DELETE RESTRICT" in media_sql["sql"]:
+                conn.executescript("""
+                    ALTER TABLE media RENAME TO media_restrict;
+                    CREATE TABLE media (
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      kind TEXT NOT NULL CHECK(kind IN ('photo', 'video')),
+                      category_id INTEGER NOT NULL
+                        REFERENCES media_category(id) ON DELETE CASCADE,
+                      filename TEXT NOT NULL UNIQUE,
+                      name TEXT NOT NULL,
+                      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    INSERT INTO media (
+                        id, kind, category_id, filename, name, created_at
+                    )
+                    SELECT id, kind, category_id, filename, name,
+                           COALESCE(created_at, datetime('now'))
+                    FROM media_restrict;
+                    DROP TABLE media_restrict;
+                """)
+            # There is always at least one category to file a media under
+            # — deleting the last one is refused (see `MediaCategory`), so
+            # this only ever fires on a library that has none at all: a
+            # fresh database, or one from before this table existed.
+            # Renaming it away is fine, which is why this looks at whether
+            # the table is empty rather than for this name.
+            conn.execute(
+                """
+                INSERT INTO media_category (name)
+                SELECT 'Default'
+                WHERE NOT EXISTS (SELECT 1 FROM media_category)
+                """
+            )
             plugin_ids = {
                 "kbrd.image": "kbrd.render-image",
                 "kbrd.label": "kbrd.render-label",

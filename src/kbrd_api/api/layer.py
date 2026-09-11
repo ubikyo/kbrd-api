@@ -8,9 +8,42 @@ from flask import Flask, jsonify, request, send_from_directory
 from kbrd_api.db import DB
 
 
+MEDIA_COLUMNS = "id, kind, category_id, filename, name, created_at"
+
+
 class Layer:
-    ALLOWED_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png"}
-    ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".webm"}
+    # What the device can actually play, which is what decides these — a
+    # file it can't render is worse stored than refused.
+    #
+    # Images go through Kivy's SDL2_image loader. It is built here with
+    # more than this (BMP, GIF and a run of legacy formats), but PNG and
+    # JPEG are the two kept: the rest buy nothing a key's artwork needs.
+    #
+    # Videos go through Kivy's gstplayer, and these are the containers it
+    # has a *native* GStreamer demuxer for on the device: `isomp4` for
+    # MP4/M4V/MOV, `matroska` for MKV/WebM, `avi` for AVI. MPEG-TS
+    # (.m2ts/.mts), MPEG-PS (.mpg/.mpeg), ASF (.wmv), FLV and animated GIF
+    # are deliberately left out: ffmpeg can demux all of them and
+    # `gst1-libav` would register `avdemux_*` elements for them, but at a
+    # lower rank than a native demuxer — a fallback, not a guarantee.
+    # Adding any of them means enabling its own plugin in
+    # `kbrd_defconfig` first (`…PLUGIN_MPEGTSDEMUX`, `…PLUGIN_FLV`,
+    # `GST1_PLUGINS_UGLY` for ASF).
+    ALLOWED_IMAGE_EXTENSIONS = {".jpeg", ".jpg", ".png"}
+    ALLOWED_VIDEO_EXTENSIONS = {
+        ".avi",
+        ".m4v",
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".webm",
+    }
+    # A video's declared type can't quite be held to `video/…` the way an
+    # image's can: whether a browser can name `.mkv` or `.avi` at all
+    # depends on the machine it runs on, and one that can't sends nothing.
+    # Where there *is* a type it still has to be a video's; where there
+    # isn't, the extension carries the check alone.
+    AMBIGUOUS_VIDEO_MIMETYPES = {"", "application/octet-stream"}
     ALLOWED_FONT_EXTENSIONS = {".otf", ".ttf"}
     MEDIA_PLUGIN_IDS = ("kbrd.render-image", "kbrd.render-video")
 
@@ -24,9 +57,31 @@ class Layer:
     ):
         self.db = db
         self.layout_api = layout_api
-        self.media_dir = Path(media_dir)
-        self.font_dir = Path(font_dir)
-        self.bundled_font_dir = Path(bundled_font_dir)
+        # Resolved, and that matters: an upload is written with a plain
+        # filesystem path (relative to the working directory), but reads go
+        # through Flask's `send_from_directory`, which resolves a relative
+        # path against the *application root* — the package folder — not the
+        # working directory. Configured relatively (as `dev.sh` does), the
+        # two point at different places and every stored file comes back a
+        # 404. Absolute paths, which is what a device uses, were never
+        # affected; resolving here fixes it for any configuration.
+        self.media_dir = Path(media_dir).resolve()
+        self.font_dir = Path(font_dir).resolve()
+        self.bundled_font_dir = Path(bundled_font_dir).resolve()
+
+    @staticmethod
+    def media_to_dict(row) -> dict:
+        return {
+            "id": row["id"],
+            "kind": row["kind"],
+            "category_id": row["category_id"],
+            # The generated name the file is stored under, and what
+            # `GET /api/media/<filename>` serves it back from.
+            "filename": row["filename"],
+            # The name it was dropped under.
+            "name": row["name"],
+            "created_at": row["created_at"],
+        }
 
     @staticmethod
     def _media_names(config) -> set[str]:
@@ -42,6 +97,22 @@ class Layer:
             if isinstance(filename, str) and Path(filename).name == filename
         }
 
+    @staticmethod
+    def _media_is_in_library(conn, filename: str) -> bool:
+        """Whether the Media panel's own library still holds this file.
+
+        A library row is a reference in its own right: without this, a file
+        dropped into the panel, attached to a key and then removed from
+        that key would be collected below while the library still listed
+        it."""
+        return (
+            conn.execute(
+                "SELECT 1 FROM media WHERE filename=? LIMIT 1",
+                (filename,),
+            ).fetchone()
+            is not None
+        )
+
     def _media_is_referenced(self, conn, filename: str) -> bool:
         placeholders = ",".join("?" for _ in self.MEDIA_PLUGIN_IDS)
         rows = conn.execute(
@@ -56,14 +127,25 @@ class Layer:
                 continue
         return False
 
+    def discard_media(self, conn, filename: str) -> None:
+        """Drop a stored file once nothing points at it any more.
+
+        Two things can point at one: the Media panel's own library, and any
+        plugin config using it. A file outlives both before it goes, which
+        is what lets a media be deleted from the library while a key still
+        draws with it — and the other way round."""
+        if self._media_is_in_library(conn, filename):
+            return
+        if self._media_is_referenced(conn, filename):
+            return
+        try:
+            (self.media_dir / filename).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _delete_media(self, conn, config, keep=frozenset()) -> None:
         for filename in self._media_names(config) - set(keep):
-            if self._media_is_referenced(conn, filename):
-                continue
-            try:
-                (self.media_dir / filename).unlink(missing_ok=True)
-            except OSError:
-                pass
+            self.discard_media(conn, filename)
 
     def _delete_plugin_media(self, conn, row) -> None:
         if row is None or row["plugin_id"] not in self.MEDIA_PLUGIN_IDS:
@@ -237,9 +319,9 @@ class Layer:
                 extension in self.ALLOWED_IMAGE_EXTENSIONS
                 and mimetype.startswith("image/")
             )
-            valid_video = (
-                extension in self.ALLOWED_VIDEO_EXTENSIONS
-                and mimetype.startswith("video/")
+            valid_video = extension in self.ALLOWED_VIDEO_EXTENSIONS and (
+                mimetype.startswith("video/")
+                or mimetype in self.AMBIGUOUS_VIDEO_MIMETYPES
             )
             if not (valid_image or valid_video):
                 return jsonify(error="invalid media"), 400
@@ -250,7 +332,50 @@ class Layer:
             except OSError as exc:
                 app.logger.exception("Unable to store uploaded media")
                 return jsonify(error=f"media storage unavailable: {exc.strerror}"), 500
-            return jsonify(filename=filename), 201
+
+            # `category_id` is what turns an upload into a library entry
+            # (see KBRD-WEB's Media panel). Without it this is just a file
+            # store, which is all the plugin editors have ever needed from
+            # it — and they keep getting exactly the `{filename}` they
+            # already read.
+            category_id = request.form.get("category_id")
+            if category_id is None:
+                return jsonify(filename=filename), 201
+
+            with self.db.connect() as conn:
+                try:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO media (kind, category_id, filename, name)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            "photo" if valid_image else "video",
+                            int(category_id),
+                            filename,
+                            uploaded.filename,
+                        ),
+                    )
+                except (ValueError, sqlite3.IntegrityError):
+                    # No such category, most likely. The file is already
+                    # written, so it goes back out rather than being left
+                    # behind with nothing pointing at it.
+                    (self.media_dir / filename).unlink(missing_ok=True)
+                    return jsonify(error="unknown category"), 400
+                conn.commit()
+                row = conn.execute(
+                    f"SELECT {MEDIA_COLUMNS} FROM media WHERE id=?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+                return jsonify(self.media_to_dict(row)), 201
+
+        @app.get("/api/media")
+        def list_medias():
+            with self.db.connect() as conn:
+                rows = conn.execute(
+                    f"SELECT {MEDIA_COLUMNS} FROM media ORDER BY id"
+                ).fetchall()
+                return jsonify([self.media_to_dict(row) for row in rows])
 
         @app.get("/api/media/<filename>")
         def get_media(filename):
