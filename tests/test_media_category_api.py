@@ -269,6 +269,145 @@ class MediaCategoryApiTest(unittest.TestCase):
         self.assertTrue(media_path.is_file())
         self.assertEqual(len(self.client.get("/api/media").json), 1)
 
+    def _upload(self, name="art.png", mimetype="image/png"):
+        category = self.client.get("/api/media-category").json[0]
+        return self.client.post(
+            "/api/media",
+            data={
+                **self._file(name, mimetype),
+                "category_id": str(category["id"]),
+            },
+            content_type="multipart/form-data",
+        ).json
+
+    def test_replacing_a_media_keeps_its_entry_and_drops_its_file(self):
+        media = self._upload("logo.png")
+        before = Path(self.media_dir.name) / media["filename"]
+
+        replaced = self.client.put(
+            f"/api/media/{media['filename']}",
+            data=self._file("other.png"),
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(replaced.status_code, 200)
+        # The same entry, under the same category — a new file behind it,
+        # named after the one that was dropped.
+        self.assertEqual(replaced.json["id"], media["id"])
+        self.assertEqual(replaced.json["category_id"], media["category_id"])
+        self.assertEqual(replaced.json["name"], "other.png")
+        self.assertNotEqual(replaced.json["filename"], media["filename"])
+
+        listed = self.client.get("/api/media").json
+        self.assertEqual([item["filename"] for item in listed],
+                         [replaced.json["filename"]])
+        self.assertFalse(before.exists())
+        self.assertTrue(
+            (Path(self.media_dir.name) / replaced.json["filename"]).is_file()
+        )
+
+    def test_a_replaced_file_stays_while_a_key_still_draws_with_it(self):
+        media = self._upload()
+        before = Path(self.media_dir.name) / media["filename"]
+        layout = self.client.post(
+            "/api/layout", json={"name": "Default", "unit": "mm"}
+        ).json
+        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        self.client.post(
+            f"/api/layer/{layer['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-image",
+                "plugin_version": "1.0.0",
+                "config": {"media": media["filename"]},
+            },
+        )
+
+        self.client.put(
+            f"/api/media/{media['filename']}",
+            data=self._file("other.png"),
+            content_type="multipart/form-data",
+        )
+
+        self.assertTrue(before.is_file())
+
+    def test_a_media_is_only_replaced_by_its_own_kind(self):
+        media = self._upload("logo.png")
+
+        response = self.client.put(
+            f"/api/media/{media['filename']}",
+            data=self._file("clip.mp4", "video/mp4"),
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            self.client.get("/api/media").json[0]["filename"], media["filename"]
+        )
+
+    def test_replacing_refuses_a_file_the_device_could_not_render(self):
+        media = self._upload()
+
+        response = self.client.put(
+            f"/api/media/{media['filename']}",
+            data=self._file("notes.txt", "text/plain"),
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            self.client.get("/api/media").json[0]["filename"], media["filename"]
+        )
+
+    def test_deleting_a_media_takes_its_file(self):
+        media = self._upload()
+        path = Path(self.media_dir.name) / media["filename"]
+
+        deleted = self.client.delete(f"/api/media/{media['filename']}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(self.client.get("/api/media").json, [])
+        self.assertFalse(path.exists())
+
+    def test_a_deleted_media_keeps_its_file_while_a_key_draws_with_it(self):
+        media = self._upload()
+        path = Path(self.media_dir.name) / media["filename"]
+        layout = self.client.post(
+            "/api/layout", json={"name": "Default", "unit": "mm"}
+        ).json
+        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        self.client.post(
+            f"/api/layer/{layer['id']}/keys/A/plugins",
+            json={
+                "plugin_id": "kbrd.render-image",
+                "plugin_version": "1.0.0",
+                "config": {"media": media["filename"]},
+            },
+        )
+
+        self.assertEqual(
+            self.client.delete(f"/api/media/{media['filename']}").status_code, 200
+        )
+        self.assertEqual(self.client.get("/api/media").json, [])
+        self.assertTrue(path.is_file())
+
+    def test_unknown_media(self):
+        # A file stored without a category is not a library entry, so
+        # neither route knows it either.
+        stored = self.client.post(
+            "/api/media",
+            data=self._file(),
+            content_type="multipart/form-data",
+        ).json["filename"]
+        for filename in (stored, "nothing.png"):
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    self.client.delete(f"/api/media/{filename}").status_code, 404
+                )
+                self.assertEqual(
+                    self.client.put(
+                        f"/api/media/{filename}",
+                        data=self._file(),
+                        content_type="multipart/form-data",
+                    ).status_code,
+                    404,
+                )
+
     def test_unknown_category(self):
         self.assertEqual(
             self.client.put("/api/media-category/999", json={"name": "Icons"}).status_code,

@@ -946,7 +946,9 @@ paths:
       - name: filename
         in: path
         required: true
-        description: The generated name a `POST /api/media` handed back.
+        description: |
+          The generated name a `POST /api/media` handed back — the file
+          itself, and the library entry holding it.
         schema:
           type: string
     get:
@@ -963,6 +965,84 @@ paths:
                 format: binary
         "404":
           description: No such file.
+    put:
+      tags: [Media]
+      summary: Replace a media's file
+      description: |
+        The same library entry with a new file behind it — what the Media
+        panel does when one media is dropped onto another's square. The
+        entry keeps its id and its category; it takes the new file's
+        generated name and the name that file was dropped under.
+
+        The new file has to pass the same checks an upload does, and to be
+        of the same kind as the one it replaces: a photo for a photo, a
+        video for a video.
+
+        The file that was there is dropped unless a plugin config still
+        draws with it — a key that was given that media keeps what it was
+        given.
+      operationId: replaceMedia
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Replaced — the library entry as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Media"
+        "400":
+          description: |
+            No file, not an accepted image/video, or not the kind it would
+            be replacing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No library entry holds that file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The file could not be written.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Media]
+      summary: Delete a media
+      description: |
+        Drops the library entry, and its file with it unless a plugin
+        config still draws with that file.
+      operationId: deleteMedia
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "404":
+          description: No library entry holds that file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/media-category:
     get:

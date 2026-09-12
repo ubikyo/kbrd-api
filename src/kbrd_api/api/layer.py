@@ -83,6 +83,39 @@ class Layer:
             "created_at": row["created_at"],
         }
 
+    def _uploaded_kind(self, uploaded) -> str | None:
+        """Which kind an upload would be filed under, or `None` if the
+        device could not render it at all — the extension and the declared
+        type together (mirrored in kbrd-web's own `mediaKindOf`, which
+        makes the same call before a file is even sent)."""
+        extension = Path(uploaded.filename).suffix.lower()
+        mimetype = uploaded.mimetype or ""
+        if extension in self.ALLOWED_IMAGE_EXTENSIONS and mimetype.startswith(
+            "image/"
+        ):
+            return "photo"
+        if extension in self.ALLOWED_VIDEO_EXTENSIONS and (
+            mimetype.startswith("video/")
+            or mimetype in self.AMBIGUOUS_VIDEO_MIMETYPES
+        ):
+            return "video"
+        return None
+
+    def _store(self, uploaded) -> str:
+        """Writes an accepted upload under a generated name and hands that
+        name back — what a library row and a plugin config both refer to.
+        Raises `OSError` if it could not be written."""
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid4().hex}{Path(uploaded.filename).suffix.lower()}"
+        uploaded.save(self.media_dir / filename)
+        return filename
+
+    @staticmethod
+    def _is_stored_name(filename: str) -> bool:
+        """Whether a filename off the URL names a file in the media
+        directory and nothing above it."""
+        return Path(filename).name == filename
+
     @staticmethod
     def _media_names(config) -> set[str]:
         if not isinstance(config, dict):
@@ -313,22 +346,11 @@ class Layer:
             uploaded = request.files.get("file")
             if uploaded is None or not uploaded.filename:
                 return jsonify(error="missing file"), 400
-            extension = Path(uploaded.filename).suffix.lower()
-            mimetype = uploaded.mimetype or ""
-            valid_image = (
-                extension in self.ALLOWED_IMAGE_EXTENSIONS
-                and mimetype.startswith("image/")
-            )
-            valid_video = extension in self.ALLOWED_VIDEO_EXTENSIONS and (
-                mimetype.startswith("video/")
-                or mimetype in self.AMBIGUOUS_VIDEO_MIMETYPES
-            )
-            if not (valid_image or valid_video):
+            kind = self._uploaded_kind(uploaded)
+            if kind is None:
                 return jsonify(error="invalid media"), 400
             try:
-                self.media_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{uuid4().hex}{extension}"
-                uploaded.save(self.media_dir / filename)
+                filename = self._store(uploaded)
             except OSError as exc:
                 app.logger.exception("Unable to store uploaded media")
                 return jsonify(error=f"media storage unavailable: {exc.strerror}"), 500
@@ -350,7 +372,7 @@ class Layer:
                         VALUES (?, ?, ?, ?)
                         """,
                         (
-                            "photo" if valid_image else "video",
+                            kind,
                             int(category_id),
                             filename,
                             uploaded.filename,
@@ -380,6 +402,69 @@ class Layer:
         @app.get("/api/media/<filename>")
         def get_media(filename):
             return send_from_directory(self.media_dir, filename)
+
+        @app.put("/api/media/<filename>")
+        def replace_media(filename):
+            # The same library entry with a new file behind it — what the
+            # Media panel does when one media is dropped onto another's
+            # square. The entry keeps its id and its category; what it is
+            # stored as, and the name it was dropped under, are the new
+            # file's.
+            uploaded = request.files.get("file")
+            if uploaded is None or not uploaded.filename:
+                return jsonify(error="missing file"), 400
+            kind = self._uploaded_kind(uploaded)
+            if kind is None:
+                return jsonify(error="invalid media"), 400
+            if not self._is_stored_name(filename):
+                return jsonify(error="not found"), 404
+
+            with self.db.connect() as conn:
+                row = conn.execute(
+                    f"SELECT {MEDIA_COLUMNS} FROM media WHERE filename=?",
+                    (filename,),
+                ).fetchone()
+                if row is None:
+                    return jsonify(error="not found"), 404
+                # An entry stays in the tab it is being shown under: a
+                # photo is replaced by a photo, a video by a video.
+                if kind != row["kind"]:
+                    return jsonify(error=f"expected a {row['kind']}"), 400
+                try:
+                    stored = self._store(uploaded)
+                except OSError as exc:
+                    app.logger.exception("Unable to store uploaded media")
+                    return jsonify(error=f"media storage unavailable: {exc.strerror}"), 500
+                conn.execute(
+                    "UPDATE media SET filename=?, name=? WHERE id=?",
+                    (stored, uploaded.filename, row["id"]),
+                )
+                conn.commit()
+                # Nothing in the library holds the old file any more, so
+                # it goes — unless a plugin config still draws with it: a
+                # key that was given that media keeps what it was given.
+                self.discard_media(conn, filename)
+                updated = conn.execute(
+                    f"SELECT {MEDIA_COLUMNS} FROM media WHERE id=?",
+                    (row["id"],),
+                ).fetchone()
+                return jsonify(self.media_to_dict(updated))
+
+        @app.delete("/api/media/<filename>")
+        def delete_media(filename):
+            # Takes the file with it unless a plugin config still points
+            # at it, exactly as deleting the whole category does.
+            if not self._is_stored_name(filename):
+                return jsonify(error="not found"), 404
+            with self.db.connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM media WHERE filename=?", (filename,)
+                )
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return jsonify(error="not found"), 404
+                self.discard_media(conn, filename)
+                return jsonify(ok=True)
 
         @app.get("/api/layout/<int:layout_id>/layer")
         def list_layers(layout_id):
