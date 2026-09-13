@@ -28,6 +28,12 @@ def main() -> None:
         db_path=str(ROOT / "data" / "kbrd.db"),
         media_dir=str(WEB_DATA / "media"),
         font_dir=str(WEB_DATA / "fonts"),
+        # Beside the development database rather than on `/data`,
+        # which is the device's. Nothing here applies it either:
+        # `/usr/bin/kbrd-network` only exists on the keyboard, so
+        # `/api/network` answers `available: false` and KBRD-WEB
+        # says so (see `api/network.py`).
+        network_config_path=str(ROOT / "data" / "network.conf"),
     )
     app, config = create_app(config)
     print(f"  media : {config.media_dir}")

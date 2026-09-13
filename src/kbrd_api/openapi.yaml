@@ -90,6 +90,20 @@ tags:
       How full the device's own partitions are — the boot and system
       partitions, and `/data`, which holds the database, the media library
       and the fonts. Read at the moment it is asked for; nothing is stored.
+  - name: Network
+    description: |
+      The keyboard's own Wi-Fi. With no network saved — a keyboard out of
+      the box — it brings up an access point of its own instead, on a
+      fixed address, and serves DHCP on it so KBRD-WEB can be reached to
+      be told which network to join. It falls back to that same access
+      point when a saved network can't be joined, which is what makes a
+      keyboard recoverable after a router changes.
+
+      Saving does not take effect inside the request: joining a network
+      takes the interface down, usually the very one the request came in
+      on, so the answer is sent first and the change applied a moment
+      later.
+
   - name: Agent
     description: |
       The KBRD Agent on the paired machine. Same push model as Device, and
@@ -1391,6 +1405,107 @@ paths:
                     items:
                       $ref: "#/components/schemas/StoragePartition"
 
+  /api/network:
+    get:
+      tags: [Network]
+      summary: What the Wi-Fi is doing, and what it was told to do
+      description: |
+        `mode` is `hotspot` while the keyboard broadcasts its own access
+        point and `wifi` once it has joined a network. `config` is what
+        was last saved here, which is not necessarily what is running:
+        a network that couldn't be joined leaves the configuration in
+        place and the hotspot up.
+
+        `available` is `false` off the device — the helper this reads
+        through only exists on the keyboard — and then `config` is all
+        that comes back.
+
+        The key is never returned. `config.secured` says whether there
+        is one.
+      operationId: getNetwork
+      responses:
+        "200":
+          description: The interface's state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkStatus"
+
+    put:
+      tags: [Network]
+      summary: Save the network to join
+      description: |
+        Stored on the data partition, so it survives a reflash, and
+        applied about a second after this answers — long enough for the
+        answer to leave, since applying it drops the interface the caller
+        is most likely on. The caller should expect the connection to go
+        away and to come back on the new address.
+
+        A key of between 8 and 63 characters, WPA2's own range. Sending
+        an empty one declares an open network; leaving `passphrase` out
+        of the body altogether keeps the one already saved, since it is
+        never sent back out and could not otherwise be left alone.
+
+        A static configuration needs at least an address and a netmask;
+        the gateway and the two DNS servers are optional, since a
+        keyboard on a network with no route out still answers on it.
+      operationId: setNetwork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NetworkWrite"
+      responses:
+        "200":
+          description: Saved, and queued to be applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  config:
+                    $ref: "#/components/schemas/NetworkConfig"
+        "400":
+          description: |
+            An SSID outside 1–32 characters, a key outside 8–63, an IPv4
+            mode other than `dhcp`/`static`, a static configuration
+            missing its address or netmask, or an address, netmask,
+            gateway or DNS server that isn't one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/network/scan:
+    post:
+      tags: [Network]
+      summary: The networks in range
+      description: |
+        Strongest first, iwd's own ordering, one entry per SSID. Takes a
+        few seconds: the radio has to scan. Works while the hotspot is up,
+        which is the point of it — the network to join is picked from a
+        browser attached to that hotspot, over the same radio.
+
+        An empty list off the device, and also when the scan itself
+        failed: a scan that found nothing and a scan that couldn't run are
+        not told apart.
+      operationId: scanNetworks
+      responses:
+        "200":
+          description: What the radio saw.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  networks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ScannedNetwork"
+
   /api/agent:
     get:
       tags: [Agent]
@@ -2070,3 +2185,114 @@ components:
             connected:
               type: boolean
         - $ref: "#/components/schemas/AgentIdentity"
+
+    NetworkIpv4:
+      type: object
+      properties:
+        address:
+          type: string
+          description: The address on the interface, empty while there is none.
+        netmask:
+          type: string
+        gateway:
+          type: string
+          description: The default route, empty when the network offers none.
+        dns:
+          type: array
+          items:
+            type: string
+          description: The resolvers in use, at most two.
+
+    NetworkIpv4Config:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [dhcp, static]
+        address:
+          type: string
+        netmask:
+          type: string
+        gateway:
+          type: string
+        dns1:
+          type: string
+        dns2:
+          type: string
+
+    NetworkConfig:
+      type: object
+      description: What was last saved, never what is running.
+      properties:
+        ssid:
+          type: string
+        secured:
+          type: boolean
+          description: |
+            Whether a key was saved. The key itself is never returned.
+        ipv4:
+          $ref: "#/components/schemas/NetworkIpv4Config"
+
+    NetworkStatus:
+      type: object
+      properties:
+        available:
+          type: boolean
+          description: |
+            `false` off the device, where only `config` is answered.
+        interface:
+          type: string
+          description: The Wi-Fi interface, `wlan0` on a CM4.
+        mode:
+          type: string
+          enum: [wifi, hotspot, unknown]
+        connected:
+          type: boolean
+          description: |
+            An access point that is broadcasting, or a network that has
+            been joined and has an address.
+        ssid:
+          type: string
+          description: |
+            The network joined, or the access point's own name while the
+            hotspot is up.
+        ipv4:
+          $ref: "#/components/schemas/NetworkIpv4"
+        hotspot:
+          type: object
+          description: |
+            The access point this keyboard falls back to: the name it
+            broadcasts, and the address it answers on.
+          properties:
+            ssid:
+              type: string
+            address:
+              type: string
+        config:
+          $ref: "#/components/schemas/NetworkConfig"
+
+    NetworkWrite:
+      type: object
+      required: [ssid]
+      properties:
+        ssid:
+          type: string
+          minLength: 1
+          maxLength: 32
+        passphrase:
+          type: string
+          description: |
+            8 to 63 characters; empty for an open network. Write-only —
+            leave the property out entirely to keep the saved key.
+        ipv4:
+          $ref: "#/components/schemas/NetworkIpv4Config"
+
+    ScannedNetwork:
+      type: object
+      properties:
+        ssid:
+          type: string
+        security:
+          type: string
+          description: |
+            As iwd names it — `psk`, `open`, `8021x`, `wep (unsupported)`.

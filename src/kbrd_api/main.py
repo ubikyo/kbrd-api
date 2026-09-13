@@ -10,6 +10,7 @@ from kbrd_api.api.layer import Layer
 from kbrd_api.api.media_category import MediaCategory
 from kbrd_api.api.agent import Agent
 from kbrd_api.api.device import Device
+from kbrd_api.api.network import Network
 from kbrd_api.api.backup import Backup
 from kbrd_api.api.storage import Storage
 
@@ -31,6 +32,7 @@ def create_app(cfg: Config | None = None) -> tuple[Flask, Config]:
     Docs().register(app)
     Agent().register(app)
     Device().register(app)
+    Network(cfg.network_config_path).register(app)
     Storage().register(app)
     Backup(db, cfg.media_dir).register(app)
     Display(db).register(app)
