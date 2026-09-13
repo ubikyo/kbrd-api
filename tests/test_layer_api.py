@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from kbrd_api.config import Config
+from tests.test_fonts import font as sfnt, WINDOWS_ENGLISH
 
 try:
     from kbrd_api.main import create_app
@@ -203,8 +204,6 @@ class LayerApiTest(unittest.TestCase):
         ).json
         self.client.put(f"/api/layer/{layer['id']}/activate")
         listed = self.client.get("/api/layer")
-        # `self.layout` (from `setUp`) already started with its own
-        # "Default" layer (see `Layout._write`) — this one's on top of it.
         self.assertIn(layer["id"], [item["id"] for item in listed.json])
 
         other = self.client.post("/api/layout", json={
@@ -515,9 +514,7 @@ class LayerApiTest(unittest.TestCase):
         clone_layers = self.client.get(f"/api/layout/{clone['id']}/layer").json
         self.assertEqual(
             sorted(layer["name"] for layer in clone_layers),
-            # "Default" comes along too — every layout (including
-            # `self.layout`, from `setUp`) starts with one.
-            ["Default", "Layer A", "Layer B"],
+            ["Layer A", "Layer B"],
         )
         cloned_layer_a = next(l for l in clone_layers if l["name"] == "Layer A")
         self.assertEqual(
@@ -557,12 +554,7 @@ class LayerApiTest(unittest.TestCase):
         self.assertEqual(replaced["unit_mm"], 24)
 
         layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
-        # "Default" comes along too — `source_layout` started with one of
-        # its own (see `Layout._write`), and it's a real layer belonging
-        # to the source, cascaded like any other.
-        self.assertEqual(
-            sorted(layer["name"] for layer in layers), ["Default", "Source layer"]
-        )
+        self.assertEqual([layer["name"] for layer in layers], ["Source layer"])
         source_layer_after = next(l for l in layers if l["name"] == "Source layer")
         self.assertEqual(
             [plugin["key_ref"] for plugin in source_layer_after["plugins"]], ["X"]
@@ -572,16 +564,19 @@ class LayerApiTest(unittest.TestCase):
             next((l for l in layers if l["id"] == target_layer["id"]), None)
         )
 
-    def test_creating_a_layout_creates_a_default_layer(self):
+    def test_creating_a_layout_creates_no_layer(self):
+        # A fresh layout starts empty — Layer mode's own empty state is
+        # what offers to add the first layer (see `Layout._write`).
         layers = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
-        self.assertEqual([layer["name"] for layer in layers], ["Default"])
+        self.assertEqual(layers, [])
 
     def test_cannot_delete_the_last_layer_but_can_delete_any_other(self):
-        # `self.layout` already has its own "Default" — deleting it while
+        # Once a layout has a layer, it must keep one — deleting it while
         # it's the only one must be rejected.
-        default_layer = self.client.get(
-            f"/api/layout/{self.layout['id']}/layer"
-        ).json[0]
+        default_layer = self.client.post(
+            f"/api/layout/{self.layout['id']}/layer",
+            json={"name": "Default"},
+        ).json
         rejected = self.client.delete(f"/api/layer/{default_layer['id']}")
         self.assertEqual(rejected.status_code, 400)
         still_there = self.client.get(f"/api/layout/{self.layout['id']}/layer").json
@@ -850,16 +845,74 @@ class LayerApiTest(unittest.TestCase):
         self.assertEqual(response.json, {"error": "invalid media"})
 
     def test_lists_and_serves_data_fonts(self):
+        # Two files of one family, neither of which a filename could be
+        # split into it: `Teko-Light` says "Teko Light" in the name its
+        # older records carry, and only its typographic pair says the
+        # family is "Teko" — see `kbrd_api/fonts.py`.
+        Path(self.bundled_font_dir.name, "Teko-Bold.ttf").write_bytes(
+            sfnt({
+                (*WINDOWS_ENGLISH, 1): "Teko",
+                (*WINDOWS_ENGLISH, 2): "Bold",
+            }, weight=700)
+        )
+        Path(self.bundled_font_dir.name, "Teko-Light.ttf").write_bytes(
+            sfnt({
+                (*WINDOWS_ENGLISH, 1): "Teko Light",
+                (*WINDOWS_ENGLISH, 2): "Regular",
+                (*WINDOWS_ENGLISH, 16): "Teko",
+                (*WINDOWS_ENGLISH, 17): "Light",
+            }, weight=300)
+        )
+
         listed = self.client.get("/api/fonts")
         self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json, [{
-            "label": "Emoji",
-            "value": "Emoji.ttf",
-        }])
+        self.assertEqual(listed.json, [
+            # `Emoji.ttf` holds nine bytes that are not a font. It is
+            # still listed, named after itself, with the empty style the
+            # editors show as "Regular".
+            {
+                "value": "Emoji.ttf",
+                "label": "Emoji",
+                "family": "Emoji",
+                "style": "",
+            },
+            # Light before Bold: a family is ordered by weight, not
+            # alphabetically, which would open it on the wrong end.
+            {
+                "value": "Teko-Light.ttf",
+                "label": "Teko Light",
+                "family": "Teko",
+                "style": "Light",
+            },
+            {
+                "value": "Teko-Bold.ttf",
+                "label": "Teko Bold",
+                "family": "Teko",
+                "style": "Bold",
+            },
+        ])
 
         with self.client.get("/api/fonts/Emoji.ttf") as font:
             self.assertEqual(font.status_code, 200)
             self.assertEqual(font.data, b"font-data")
+
+    def test_names_an_uploaded_font_from_the_file_that_is_served(self):
+        # Same filename in both directories: the upload is what
+        # `/api/fonts/<filename>` hands back, so it has to be what the
+        # listing read the family off too.
+        Path(self.bundled_font_dir.name, "Face.ttf").write_bytes(
+            sfnt({(*WINDOWS_ENGLISH, 1): "Bundled"})
+        )
+        Path(self.font_dir.name, "Face.ttf").write_bytes(
+            sfnt({(*WINDOWS_ENGLISH, 1): "Uploaded"})
+        )
+
+        listed = self.client.get("/api/fonts")
+
+        self.assertEqual(
+            [entry["family"] for entry in listed.json if entry["value"] == "Face.ttf"],
+            ["Uploaded"],
+        )
 
 
 if __name__ == "__main__":

@@ -224,7 +224,9 @@ class MediaCategoryApiTest(unittest.TestCase):
         layout = self.client.post(
             "/api/layout", json={"name": "Default", "unit": "mm"}
         ).json
-        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        layer = self.client.post(
+            f"/api/layout/{layout['id']}/layer", json={"name": "Default"}
+        ).json
         self.client.post(
             f"/api/layer/{layer['id']}/keys/A/plugins",
             json={
@@ -255,7 +257,9 @@ class MediaCategoryApiTest(unittest.TestCase):
         layout = self.client.post(
             "/api/layout", json={"name": "Default", "unit": "mm"}
         ).json
-        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        layer = self.client.post(
+            f"/api/layout/{layout['id']}/layer", json={"name": "Default"}
+        ).json
         plugin = self.client.post(
             f"/api/layer/{layer['id']}/keys/A/plugins",
             json={
@@ -311,7 +315,9 @@ class MediaCategoryApiTest(unittest.TestCase):
         layout = self.client.post(
             "/api/layout", json={"name": "Default", "unit": "mm"}
         ).json
-        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        layer = self.client.post(
+            f"/api/layout/{layout['id']}/layer", json={"name": "Default"}
+        ).json
         self.client.post(
             f"/api/layer/{layer['id']}/keys/A/plugins",
             json={
@@ -370,7 +376,9 @@ class MediaCategoryApiTest(unittest.TestCase):
         layout = self.client.post(
             "/api/layout", json={"name": "Default", "unit": "mm"}
         ).json
-        layer = self.client.get(f"/api/layout/{layout['id']}/layer").json[0]
+        layer = self.client.post(
+            f"/api/layout/{layout['id']}/layer", json={"name": "Default"}
+        ).json
         self.client.post(
             f"/api/layer/{layer['id']}/keys/A/plugins",
             json={

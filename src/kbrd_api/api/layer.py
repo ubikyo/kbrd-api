@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from kbrd_api import fonts
 from kbrd_api.db import DB
 
 
@@ -314,18 +315,40 @@ class Layer:
 
         @app.get("/api/fonts")
         def list_fonts():
-            filenames = set()
+            # Bundled first so an uploaded font of the same name replaces
+            # it here exactly as it does in `get_font` below: the family
+            # shown has to be read off the file that will be served.
+            paths = {}
             for directory in (self.bundled_font_dir, self.font_dir):
                 if directory.is_dir():
-                    filenames.update(
-                        path.name
-                        for path in directory.iterdir()
-                        if path.is_file()
-                        and path.suffix.lower() in self.ALLOWED_FONT_EXTENSIONS
-                    )
+                    for path in directory.iterdir():
+                        if (
+                            path.is_file()
+                            and path.suffix.lower() in self.ALLOWED_FONT_EXTENSIONS
+                        ):
+                            paths[path.name] = path
+            # Each face as it names itself rather than as it was filed:
+            # the editors group the picker by family, which a filename
+            # can't be split into — see `kbrd_api/fonts.py`. The filename
+            # still breaks a tie, so two faces a font can't tell apart
+            # keep a stable order between requests.
+            described = [
+                (filename, fonts.describe(path)) for filename, path in paths.items()
+            ]
+            described.sort(
+                key=lambda item: (fonts.sort_key(item[1]), item[0].casefold())
+            )
             return jsonify([
-                {"value": filename, "label": Path(filename).stem}
-                for filename in sorted(filenames, key=str.casefold)
+                {
+                    "value": filename,
+                    # Kept alongside the two fields it's built from, for
+                    # the editors with room for one line rather than two.
+                    "label": fonts.label(name),
+                    "family": name.family,
+                    # Empty where the file names no style at all.
+                    "style": name.style,
+                }
+                for filename, name in described
             ])
 
         @app.get("/api/fonts/<filename>")
@@ -588,7 +611,7 @@ class Layer:
                 if layer is None:
                     return jsonify(error="not found"), 404
                 # A layout must always keep at least one layer — there'd
-                # be nothing left to configure in Mapping mode otherwise
+                # be nothing left to configure in Layer mode otherwise
                 # (see `Layout._write`'s own "Default" layer on create).
                 remaining = conn.execute(
                     "SELECT COUNT(*) FROM layer WHERE layout_id=?",
@@ -850,7 +873,7 @@ class Layer:
                             ),
                         )
                 # Carries the source key's own properties along with its
-                # plugins — a "Copy" of a key's Mapping content should
+                # plugins — a "Copy" of a key's Layer content should
                 # bring everything that makes up its look/behavior, not
                 # just the plugin list (see kbrd-web's own `key_property`
                 # usage, e.g. a key's own font/label config).

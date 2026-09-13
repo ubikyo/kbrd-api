@@ -160,15 +160,11 @@ class Layout:
                 )
                 layout_id = cursor.lastrowid
                 status = 201
-                # A layout with no layer at all has nothing to actually
-                # configure in Mapping mode — every fresh layout starts
-                # with one, named "Default", the same starting point
-                # `duplicateLayout`'s own cascade already guarantees for a
-                # duplicated one.
-                conn.execute(
-                    "INSERT INTO layer(layout_id, name) VALUES (?, 'Default')",
-                    (layout_id,),
-                )
+                # No layer is created alongside it: a fresh layout starts
+                # with none at all, and Layer mode offers to add the
+                # first one itself (see `Composer`'s own empty state).
+                # A *duplicated* layout is the other story — there the
+                # cascade carries whatever layers the source had.
             else:
                 cursor = conn.execute(
                     """

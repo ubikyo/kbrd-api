@@ -56,7 +56,8 @@ tags:
   - name: Layer
     description: |
       A layer is one layout's grid disposition plus everything mapped onto
-      it. A layout always has at least one — deleting the last is refused.
+      it. A layout is created with none and KBRD-WEB offers to add the
+      first; once it has one, deleting the last is refused.
   - name: Keys
     description: |
       What sits on a key: an ordered list of plugin instances, each with
@@ -84,12 +85,24 @@ tags:
       re-registers on an interval. A registration older than 30 seconds is
       stale, which is how a silent device is told apart from one that
       never connected.
+  - name: Storage
+    description: |
+      How full the device's own partitions are — the boot and system
+      partitions, and `/data`, which holds the database, the media library
+      and the fonts. Read at the moment it is asked for; nothing is stored.
   - name: Agent
     description: |
       The KBRD Agent on the paired machine. Same push model as Device, and
       the same 30-second staleness window. The applications and browsers
       routes are proxied straight through to it — `503` when no agent is
       registered, `502` when one is but can't be reached.
+  - name: Backup
+    description: |
+      The whole device, out as one archive and back in as one archive: the
+      database (every layout, layer, key and plugin config) as
+      `database.db`, and the media library's own files — which live
+      outside it — under `media/`. Restoring puts both back, so a key that
+      was given an image finds that image there.
 
 paths:
 
@@ -158,9 +171,9 @@ paths:
       tags: [Layout]
       summary: Create a layout
       description: |
-        A fresh layout is created with one layer named "Default" — a
-        layout with no layer at all has nothing to configure in Mapping
-        mode.
+        A fresh layout is created with no layer at all — Layer mode
+        offers to add the first one. Duplicating a layout is the other
+        story: there the cascade carries the source's own layers.
       operationId: createLayout
       requestBody:
         required: true
@@ -471,7 +484,7 @@ paths:
       summary: Delete a layer
       description: |
         Refused for a layout's last layer: there'd be nothing left to
-        configure in Mapping mode.
+        configure in Layer mode.
       operationId: deleteLayer
       responses:
         "200":
@@ -1169,9 +1182,16 @@ paths:
       summary: List the available fonts
       description: |
         The bundled faces and any uploaded alongside them, `.ttf` and
-        `.otf`, de-duplicated by filename and sorted case-insensitively.
-        Shaped as `{value, label}` because that's what the editors' own
-        selects take.
+        `.otf`, de-duplicated by filename — an upload shadowing a bundled
+        face of the same name, as it does when the file itself is
+        fetched.
+
+        Each face is named as *it* names itself, read out of its own
+        `name` table rather than guessed from its filename: `family` and
+        `style` are what the editors' two-field font picker takes, and
+        `label` is the same thing on one line for the pickers with room
+        for one. Ordered by family, and within a family the way a
+        specimen is — romans before italics, each run light to heavy.
       operationId: listFonts
       responses:
         "200":
@@ -1186,10 +1206,28 @@ paths:
                     value:
                       type: string
                       description: The filename, which is what a config stores.
-                      example: Inter_18pt-Regular.ttf
+                      example: Inter_18pt-SemiBold.ttf
                     label:
                       type: string
-                      example: Inter_18pt-Regular
+                      description: |
+                        Family and style on one line, with a plain
+                        "Regular" left off.
+                      example: Inter 18pt SemiBold
+                    family:
+                      type: string
+                      description: |
+                        The face's typographic family — what the picker
+                        groups by. Falls back to the filename's stem for a
+                        file that carries no readable name table.
+                      example: Inter 18pt
+                    style:
+                      type: string
+                      description: |
+                        The face within that family. Empty where the file
+                        names no style, which the editors show as
+                        "Regular" — their own word for it, not the
+                        font's.
+                      example: SemiBold
 
   /api/fonts/{filename}:
     parameters:
@@ -1328,6 +1366,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /api/storage:
+    get:
+      tags: [Storage]
+      summary: How full each partition is
+      description: |
+        One entry per partition the image lays down, in the order they sit
+        on the card. A mount point that isn't there — or that turns out to
+        be part of a filesystem already listed, as `/boot` and `/data`
+        usually are on a development machine — is left out, so the list can
+        be shorter than three and is never empty on a device.
+      operationId: getStorage
+      responses:
+        "200":
+          description: A reading per partition.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  partitions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StoragePartition"
 
   /api/agent:
     get:
@@ -1540,6 +1602,91 @@ paths:
           $ref: "#/components/responses/AgentUnreachable"
         "503":
           $ref: "#/components/responses/AgentUnavailable"
+
+  /api/backup:
+    get:
+      tags: [Backup]
+      summary: Download a backup of the device
+      description: |
+        A ZIP holding the database as `database.db` and every media file
+        under `media/`. The database is read through SQLite rather than
+        copied off the disk, so what comes back is a consistent image of
+        every table even if something is being written while it is taken.
+
+        Served as an attachment named `kbrd-backup-<date>-<time>.zip`.
+      operationId: downloadBackup
+      responses:
+        "200":
+          description: The archive.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "500":
+          description: The archive could not be built.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/backup/restore:
+    post:
+      tags: [Backup]
+      summary: Restore the device from a backup
+      description: |
+        Replaces the database *and* the media library with the uploaded
+        archive's — every layout, layer, key and media on the device is
+        whatever the backup held, and everything since is gone. There is no
+        undo, and no confirmation here: KBRD-WEB asks before sending.
+
+        The archive is unpacked beside what it is replacing and its
+        database is opened before anything is moved, so one that isn't an
+        archive, holds no `database.db`, or holds one that isn't a
+        readable KBRD database is refused with the device untouched. A
+        backup taken by an older KBRD is brought up to the current schema
+        by the same migrations a startup runs.
+
+        Only `database.db` and plain files directly under `media/` are
+        unpacked; any other entry is ignored.
+      operationId: restoreBackup
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: |
+            Restored. The database and the media library are the archive's.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "400":
+          description: |
+            No file, a file that is not an archive, an archive with no
+            database in it, or one whose database is not a readable KBRD
+            database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The database or the media library could not be replaced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
 components:
 
@@ -1881,6 +2028,30 @@ components:
             connected:
               type: boolean
         - $ref: "#/components/schemas/DeviceSize"
+
+    StoragePartition:
+      type: object
+      properties:
+        name:
+          type: string
+          description: What KBRD-WEB labels the partition, e.g. `Data`.
+        mount:
+          type: string
+          description: Where it is mounted, e.g. `/data`.
+        total:
+          type: integer
+          format: int64
+          description: The filesystem's size, in bytes.
+        used:
+          type: integer
+          format: int64
+          description: Bytes in use, measured against the whole filesystem.
+        free:
+          type: integer
+          format: int64
+          description: |
+            Bytes still writable. `used` + `free` falls short of `total` by
+            the slice ext4 reserves for root.
 
     AgentIdentity:
       type: object

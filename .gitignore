@@ -9,6 +9,7 @@
 *.egg-info/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Base de développement (voir dev_server.py).
-data/kbrd.db
+data/*.db
