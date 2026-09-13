@@ -112,15 +112,60 @@ class DB:
                 CREATE TABLE IF NOT EXISTS display (
                   id                 INTEGER PRIMARY KEY CHECK (id = 1),
                   physical_width_mm  REAL NOT NULL DEFAULT 216,
-                  physical_height_mm REAL NOT NULL DEFAULT 135
+                  physical_height_mm REAL NOT NULL DEFAULT 135,
+                  name               TEXT NOT NULL DEFAULT '',
+                  brand              TEXT NOT NULL DEFAULT '',
+                  model              TEXT NOT NULL DEFAULT '',
+                  configured         INTEGER NOT NULL DEFAULT 0
                 );
             """)
+            display_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(display)").fetchall()
+            }
+            # Which screen this is, as the setup wizard was told (see
+            # `api/setup.py`). `brand`/`model` are only filled when it was
+            # picked out of KBRD-WEB's own list of known panels; a screen
+            # described by hand has a `name` and nothing else.
+            for column in ("name", "brand", "model"):
+                if column not in display_columns:
+                    conn.execute(
+                        f"ALTER TABLE display ADD COLUMN {column} "
+                        f"TEXT NOT NULL DEFAULT ''"
+                    )
+            # The first-run flag, and the whole of it: KBRD-WEB shows its
+            # setup wizard instead of the app until this is 1, and nothing
+            # but the wizard's own final validation sets it. A device
+            # whose `/data` has been wiped is a device that runs it again.
+            #
+            # On a database that predates the wizard it is set here rather
+            # than left at 0: that device has been in use, and has no
+            # first run left to do.
+            if "configured" not in display_columns:
+                conn.execute(
+                    "ALTER TABLE display ADD COLUMN configured "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+                conn.execute("UPDATE display SET configured=1")
             conn.execute(
                 """
                 INSERT OR IGNORE INTO display (id, physical_width_mm, physical_height_mm)
                 VALUES (1, 216, 135)
                 """
             )
+            # The one secret the device keeps: what KBRD-WEB asks for
+            # before it hands the app over (see `api/setup.py` and
+            # `password.py`). One row, pinned to id 1 the way `display`
+            # is, holding a digest and never the password itself — empty
+            # until the wizard sets one, which is what a device with no
+            # password reads as.
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS credential (
+                  id            INTEGER PRIMARY KEY CHECK (id = 1),
+                  password_hash TEXT NOT NULL DEFAULT ''
+                );
+            """)
+            conn.execute("INSERT OR IGNORE INTO credential (id) VALUES (1)")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS layer (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,

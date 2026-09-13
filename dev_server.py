@@ -34,6 +34,10 @@ def main() -> None:
         # `/api/network` answers `available: false` and KBRD-WEB
         # says so (see `api/network.py`).
         network_config_path=str(ROOT / "data" / "network.conf"),
+        # At the root of the checkout rather than of the data partition
+        # — `touch ../reset.txt` beside the submodules, and the next
+        # reload is the wizard again.
+        reset_path=str(ROOT.parent / "reset.txt"),
     )
     app, config = create_app(config)
     print(f"  media : {config.media_dir}")

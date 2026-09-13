@@ -6,7 +6,16 @@ from kbrd_api.db import DB
 class Display:
     """The physical screen's own width/height — a single row shared by
     every layout (see `db.py`'s own comment on the `display` table for why
-    this doesn't live on `layout` alongside Caps size / Gap size)."""
+    this doesn't live on `layout` alongside Caps size / Gap size).
+
+    That row also carries which screen this is (`name`/`brand`/`model`)
+    and whether the setup wizard has ever run — both written by
+    `api/setup.py` and neither touched here. A size changed by hand in
+    Settings therefore leaves the name as the wizard set it: it says what
+    panel was declared, not what the numbers have since become.
+    """
+
+    COLUMNS = "physical_width_mm, physical_height_mm, name, brand, model"
 
     def __init__(self, db: DB):
         self.db = db
@@ -16,6 +25,9 @@ class Display:
         return {
             "physical_width_mm": row["physical_width_mm"],
             "physical_height_mm": row["physical_height_mm"],
+            "name": row["name"],
+            "brand": row["brand"],
+            "model": row["model"],
         }
 
     @staticmethod
@@ -34,7 +46,7 @@ class Display:
         def get_display():
             with self.db.connect() as conn:
                 row = conn.execute(
-                    "SELECT physical_width_mm, physical_height_mm FROM display WHERE id=1"
+                    f"SELECT {self.COLUMNS} FROM display WHERE id=1"
                 ).fetchone()
                 return jsonify(self._row_to_dict(row))
 
@@ -63,6 +75,6 @@ class Display:
                 )
                 conn.commit()
                 row = conn.execute(
-                    "SELECT physical_width_mm, physical_height_mm FROM display WHERE id=1"
+                    f"SELECT {self.COLUMNS} FROM display WHERE id=1"
                 ).fetchone()
                 return jsonify(self._row_to_dict(row))

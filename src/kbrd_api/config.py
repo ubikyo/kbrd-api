@@ -14,3 +14,9 @@ class Config:
     # a `make flash`. Read back at every boot by
     # `/usr/bin/kbrd-network` (see `api/network.py`).
     network_config_path: str = "/data/network/network.conf"
+    # Drop a file here and the keyboard asks to be set up again (see
+    # `api/setup.py`). At the root of the data partition, where it can be
+    # written over SSH or SFTP in one line — there is no route for this
+    # on purpose: a device that has lost its password is a device nobody
+    # can ask nicely.
+    reset_path: str = "/data/reset.txt"

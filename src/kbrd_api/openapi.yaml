@@ -90,6 +90,16 @@ tags:
       How full the device's own partitions are — the boot and system
       partitions, and `/data`, which holds the database, the media library
       and the fonts. Read at the moment it is asked for; nothing is stored.
+  - name: Setup
+    description: |
+      The first run. A keyboard out of the box has no layout, no screen
+      declared and no network but its own hotspot, and KBRD-WEB shows a
+      wizard instead of the app until it has been through all of it.
+
+      What the wizard collects goes back in one call, at the end: until
+      every step has been answered, none of them counts, and a wizard
+      abandoned half-way leaves the device exactly as it was.
+
   - name: Network
     description: |
       The keyboard's own Wi-Fi. With no network saved — a keyboard out of
@@ -1405,6 +1415,115 @@ paths:
                     items:
                       $ref: "#/components/schemas/StoragePartition"
 
+  /api/setup:
+    get:
+      tags: [Setup]
+      summary: Has the keyboard been set up?
+      description: |
+        `configured` is false only on a device that has never been
+        through the wizard — a fresh one, or one whose `/data` has been
+        wiped. A database that predates the wizard counts as configured:
+        it has been in use, and has no first run left to do.
+
+        `display` is the screen as it currently stands, so the wizard can
+        open on what is already there. `password_set` says whether the
+        device has a password at all — never anything about it.
+
+        A device already set up asks for the wizard again while a marker
+        file sits at the service's own `reset_path` (`/data/reset.txt` on
+        a keyboard): this then answers `configured: false` whatever the
+        database holds, and completing the wizard is what removes it.
+        There is no route for that on purpose — writing the file takes
+        SSH, SFTP or the card itself.
+      operationId: getSetup
+      responses:
+        "200":
+          description: The first-run state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  password_set:
+                    type: boolean
+                    description: >
+                      Whether a password has been set for KBRD-WEB. The
+                      digest itself never leaves the device.
+                  display:
+                    $ref: "#/components/schemas/Display"
+
+    post:
+      tags: [Setup]
+      summary: Complete the first run
+      description: |
+        Writes the screen, the password KBRD-WEB is to ask for and, if one
+        was given, the network to join, and marks the device configured. Everything is validated before
+        anything is written: a body this refuses leaves the device
+        untouched and still unconfigured, so the wizard starts over
+        rather than handing over a device that is part set up.
+
+        `password` may be `null` or left out — that says this device has
+        none, and leaves whatever is stored as it was. It is kept as a
+        PBKDF2 digest and a salt, never as it was sent, and nothing reads
+        it back out.
+
+        `network` may be `null` or left out — that says to stay on the
+        hotspot for now, and is what `network_applied: false` in the
+        answer reports. Otherwise the network is saved and applied a
+        moment after this answers, exactly as `PUT /api/network` does:
+        the caller should expect the connection to go away.
+      operationId: completeSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display]
+              properties:
+                display:
+                  $ref: "#/components/schemas/DisplayWrite"
+                password:
+                  type: string
+                  nullable: true
+                  minLength: 8
+                  maxLength: 64
+                  description: What KBRD-WEB asks for before the app.
+                network:
+                  nullable: true
+                  allOf:
+                    - $ref: "#/components/schemas/NetworkWrite"
+      responses:
+        "200":
+          description: Set up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  configured:
+                    type: boolean
+                  display:
+                    $ref: "#/components/schemas/Display"
+                  network_applied:
+                    type: boolean
+                    description: |
+                      Whether the caller is about to lose the connection
+                      it asked over.
+        "400":
+          description: |
+            A missing screen, a screen with no name, a size that isn't a
+            number or isn't between 10 and 2000 mm, or a network the
+            network route would itself refuse.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/network:
     get:
       tags: [Network]
@@ -2121,6 +2240,44 @@ components:
         physical_height_mm:
           type: number
           default: 135
+        name:
+          type: string
+          description: |
+            Which screen this is, as the setup wizard was told. Empty on a
+            device that has never been through it. `PUT /api/display`
+            doesn't touch it: a size changed by hand in Settings says
+            nothing about which panel was declared.
+        brand:
+          type: string
+          description: |
+            Only set when the screen was picked out of KBRD-WEB's own
+            list of known panels; empty for one described by hand.
+        model:
+          type: string
+
+    DisplayWrite:
+      type: object
+      description: A screen, as the setup wizard declares it.
+      required: [name, physical_width_mm, physical_height_mm]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        brand:
+          type: string
+          maxLength: 64
+        model:
+          type: string
+          maxLength: 64
+        physical_width_mm:
+          type: number
+          minimum: 10
+          maximum: 2000
+        physical_height_mm:
+          type: number
+          minimum: 10
+          maximum: 2000
 
     DeviceSize:
       type: object
